@@ -1,1 +1,2 @@
 recursive-include ecco *.py *.pyx *.ebnf
+recursive-include doc *.rr *.ipynb

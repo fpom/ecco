@@ -1,0 +1,29 @@
+inhabitants:
+    Rp+: reproductives
+    Wk-: workers
+    Sd-: soldiers
+    Te-: termitomyces
+
+structures:
+    Ec-: egg chambers
+    Fg-: fungal gardens
+
+resources:
+    Wd-: wood
+
+competitors:
+    Ac+: ant competitors
+
+constraints:
+    Fg- >> Te-
+
+rules:
+    Rp+ >> Ec+
+    Rp+, Ec+ >> Wk+
+    Wk+ >> Wd+, Te+, Fg+, Ec+
+    Wk+, Wd+ >> Sd+, Rp+
+    Wk+, Te+ >> Wd-
+    Wd- >> Wk-, Te-
+    Wk- >> Fg-, Sd-
+    Wk-, Rp- >> Ec-
+    Ac+, Sd- >> Wk-, Rp-

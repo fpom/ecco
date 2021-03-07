@@ -27,6 +27,19 @@ At the heart of `ecco` is the _reaction rules_ modelling language described in [
 All together, this yields a state space that `ecco` can compute, analyse, and render graphically in a way that is suitable for interactive exploration and analysis.
 `ecco` also features static analysis tools that do not rely on the state space computation.
 
+`ecco` uses symbolic state spaces representation based on decision diagrams, older tools have used explicit state spaces instead.
+They have not been publicly released but their features will be progressively ported into `ecco`.
+One may find such an early version of `ecco` here: [DOI:10.5281/zenodo.3241370](https://doi.org/10.5281/zenodo.3241370)
+
+## Documentation
+
+`ecco` is documented through Jupyter notebooks that can be found into directory `doc`.
+
+## Contact and bug reports
+
+Please use [GitHub issues](https://github.com/fpom/ecco/issues) to report problems or ask questions about `ecco` itself.
+For more general questions, feel free to send an email to <franck.pommereau@univ-evry.fr>.
+
 ## Installation
 
 There is not yet an automated installation procedure.
@@ -53,8 +66,8 @@ First, you should install all the dependencies:
 
 Then, `ecco` package directory should be copied somewhere from which Python will be able to import it.
 
-You may want to configure Jupyter notebooks so that files with extensions `.rr` are opened and edited as Python files, which is more convenient than editing them as plain text.
-To do so, ass the following to `/etc/jupyter/nbconfig/edit.json`:
+You may want to configure Jupyter notebooks so that files with extensions `.rr` are opened and edited as Python files, which is more convenient than editing them as plain text (editing as YAML could be another good choice).
+To do so, add the following to `/etc/jupyter/nbconfig/edit.json`:
 
 ```json
 {
@@ -68,7 +81,7 @@ To do so, ass the following to `/etc/jupyter/nbconfig/edit.json`:
 
 ## Licence
 
-Copyright 2020 Franck Pommereau <franck.pommereau@univ-evry.fr>
+Copyright 2020-2021 Franck Pommereau <franck.pommereau@univ-evry.fr>
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 
