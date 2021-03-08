@@ -1,0 +1,20 @@
+components:
+    Rp+: reproductives
+    Wk-: workers
+    Sd-: soldiers
+    Te-: termitomyces
+    Ec-: egg chambers
+    Fg-: fungal gardens
+    Wd-: wood
+    Ac+: ant competitors
+
+rules:
+    Rp+ >> Ec+
+    Rp+, Ec+ >> Wk+
+    Wk+ >> Wd+, Te+, Fg+, Ec+
+    Wk+, Wd+ >> Sd+, Rp+
+    Wk+, Te+ >> Wd-
+    Wd- >> Wk-, Te-
+    Wk- >> Fg-, Sd-, Te-
+    Wk-, Rp- >> Ec-
+    Ac+, Sd- >> Wk-, Rp-
