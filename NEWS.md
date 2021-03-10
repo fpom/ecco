@@ -1,3 +1,4 @@
+ * added setup.py
  * added example notebooks in doc
  * added LICENCE and README
 

@@ -1,2 +1,3 @@
 recursive-include ecco *.py *.pyx *.ebnf
 recursive-include doc *.rr *.ipynb
+include setup.py README.md
