@@ -8,7 +8,7 @@ build:
 	cp -af ../doc .
 	docker build -t ecco .
 	rm -rf doc
-	docker tag ecco franckpommereau/ecco
 
 push:
+	docker tag ecco franckpommereau/ecco
 	docker push franckpommereau/ecco

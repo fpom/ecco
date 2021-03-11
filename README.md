@@ -35,15 +35,11 @@ One may find such an early version of `ecco` here: [DOI:10.5281/zenodo.3241370](
 
 `ecco` is documented through Jupyter notebooks that can be found into directory `doc`.
 
-## Contact and bug reports
-
-Please use [GitHub issues](https://github.com/fpom/ecco/issues) to report problems or ask questions about `ecco` itself.
-For more general questions, feel free to send an email to <franck.pommereau@univ-evry.fr>.
-
 ## Quickstart
 
 `ecco` is available as a Docker image so you don't need to install it.
 Just run `docker run -p 8000:8000 franckpommereau/ecco jupyterhub` then point your browser to [localhost:8000](http://localhost:8000) and login as user `ecco` with password `ecco`.
+The notebooks and example models are available in directory `doc`.
 
 This Docker image runs `ecco` on the top of a multi-user `JupyterHub` installation, you may reconfigure it according to you needs (in particular, to add users and data persistence).
 
@@ -52,6 +48,7 @@ This Docker image runs `ecco` on the top of a multi-user `JupyterHub` installati
 First, you should install all the dependencies:
 
  * [Python 3](https://www.python.org/) (version tested: 3.7)
+ * [GraphViz](https://www.graphviz.org/) (version tested: 2.40.1)
  * [Jupyter](https://pypi.org/project/jupyter/) (version tested: 1.0.0)
  * [NetworkX](https://pypi.org/project/networkx/) (version tested: 2.4)
  * [pandas](https://pypi.org/project/pandas/) (version tested: 0.25.3)
@@ -65,6 +62,7 @@ First, you should install all the dependencies:
  * [竜 TatSu](https://pypi.org/project/TatSu/) (version tested: 4.4.0)
  * [Cython](https://pypi.org/project/Cython/) (version tested: 0.29.14)
  * [psutil](https://pypi.org/project/psutil/) (version tested: 5.6.7)
+ * [pydot](https://pypi.org/project/pydot/) (version tested: 1.4.1)
  * [pyddd](https://github.com/fpom/pyddd) (latest version)
  * [pyits](https://github.com/fpom/pyits) (latest version)
  * [pyits model-checker](https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker) (latest version)
@@ -72,6 +70,8 @@ First, you should install all the dependencies:
  * [ptnet](https://github.com/fpom/cunf-ptnet-py3) (latest version)
 
 Then, run `python setup.py install` as usual, or `pip install git+https://github.com/fpom/ecco.git` to install directly from the [GitHub repository](https://github.com/fpom/ecco).
+
+Looking at `docker/Dockerfile` in the distribution will give you the commands to run on a Linux box with [Anaconda](https://www.anaconda.com) installed.
 
 You may want to configure Jupyter notebooks so that files with extensions `.rr` are opened and edited as Python files, which is more convenient than editing them as plain text (editing as YAML could be another good choice).
 To do so, add the following to `/etc/jupyter/nbconfig/edit.json`:
@@ -85,6 +85,11 @@ To do so, add the following to `/etc/jupyter/nbconfig/edit.json`:
   }
 }
 ```
+
+## Contact and bug reports
+
+Please use [GitHub issues](https://github.com/fpom/ecco/issues) to report problems or ask questions about `ecco` itself.
+For more general questions, feel free to send an email to <franck.pommereau@univ-evry.fr>.
 
 ## Licence
 

@@ -1,8 +1,8 @@
 FROM continuumio/anaconda3
 RUN apt-get update
-RUN apt-get -y install gcc g++ make
+RUN apt-get -y install gcc g++ make graphviz
 RUN apt-get -y autoclean
-RUN conda install -c conda-forge jupyterhub networkx pandas numpy bqplot colour bitarray sympy cython tatsu psutil openjdk prince-factor-analysis
+RUN conda install -c conda-forge jupyterhub networkx pandas numpy bqplot colour bitarray sympy cython tatsu psutil openjdk prince-factor-analysis pydot
 RUN conda clean --all --yes
 RUN pip install --no-cache-dir git+https://github.com/fpom/pytl.git
 RUN pip install --no-cache-dir git+https://github.com/fpom/cunf-ptnet-py3
