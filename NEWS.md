@@ -1,3 +1,6 @@
+## Version 0.2
+
+ * published as a Docker image
  * added setup.py
  * added example notebooks in doc
  * added LICENCE and README

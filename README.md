@@ -40,9 +40,15 @@ One may find such an early version of `ecco` here: [DOI:10.5281/zenodo.3241370](
 Please use [GitHub issues](https://github.com/fpom/ecco/issues) to report problems or ask questions about `ecco` itself.
 For more general questions, feel free to send an email to <franck.pommereau@univ-evry.fr>.
 
+## Quickstart
+
+`ecco` is available as a Docker image so you don't need to install it.
+Just run `docker run -p 8000:8000 franckpommereau/ecco jupyterhub` then point your browser to [localhost:8000](http://localhost:8000) and login as user `ecco` with password `ecco`.
+
+This Docker image runs `ecco` on the top of a multi-user `JupyterHub` installation, you may reconfigure it according to you needs (in particular, to add users and data persistence).
+
 ## Installation
 
-There is not yet an automated installation procedure.
 First, you should install all the dependencies:
 
  * [Python 3](https://www.python.org/) (version tested: 3.7)
@@ -54,6 +60,7 @@ First, you should install all the dependencies:
  * [ipywidgets](https://pypi.org/project/ipywidgets/) (version tested: 7.5.1)
  * [colour](https://pypi.org/project/colour/) (version tested: 0.1.5)
  * [bitarray](https://pypi.org/project/bitarray/) (version tested: 1.2.0)
+ * [prince](https://pypi.org/project/prince/) (version tested: 0.7.1)
  * [SymPy](https://pypi.org/project/sympy/) (version tested: 1.5)
  * [竜 TatSu](https://pypi.org/project/TatSu/) (version tested: 4.4.0)
  * [Cython](https://pypi.org/project/Cython/) (version tested: 0.29.14)
@@ -64,7 +71,7 @@ First, you should install all the dependencies:
  * [pytl](https://github.com/fpom/pytl) (latest version)
  * [ptnet](https://github.com/fpom/cunf-ptnet-py3) (latest version)
 
-Then, `ecco` package directory should be copied somewhere from which Python will be able to import it.
+Then, run `python setup.py install` as usual, or `pip install git+https://github.com/fpom/ecco.git` to install directly from the [GitHub repository](https://github.com/fpom/ecco).
 
 You may want to configure Jupyter notebooks so that files with extensions `.rr` are opened and edited as Python files, which is more convenient than editing them as plain text (editing as YAML could be another good choice).
 To do so, add the following to `/etc/jupyter/nbconfig/edit.json`:

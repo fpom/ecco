@@ -424,7 +424,7 @@ class ComponentView (_View) :
         Options:
          - on: if not provided, the component is split into its SCC hull and the
            related components. Otherwise, `on` should be either:
-           - a state expression, that is a Boolean expression such
+           - a STATES expression, that is a Boolean expression such
              that the atoms the atoms are:
               - a variable name which selects the states in which the variable is 1
               - name `DEAD` which selects deadlocks
@@ -443,6 +443,10 @@ class ComponentView (_View) :
            - a CTL formula or an ARCTL formula (see
              https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker
              for details)
+           Note that a formula may be valid for the three syntaxes, so it is checked
+           against (1) CTL syntax, (2) ARCTL syntax, and (3) STATES syntax. So if one
+           provides a STATES formula that is also a valide CTL formula, it will be
+           detected as such.
          - normalise (False): extract the SCC hull and related components from
            the components resulting from the split when `on` is provided
          - fair (None): if not `None` and if `on` is a (AR)CTL formula, a fair
@@ -478,22 +482,25 @@ class ComponentView (_View) :
                         if syntax == "ctl" :
                             if fair :
                                 checker = mc.FairCTL_model_checker(self.g.reachable,
-                                                                   self.g.m.pred(),
+                                                                   self.g.m.succ(),
                                                                    fair)
                             else :
                                 checker = mc.CTL_model_checker(self.g.reachable,
-                                                               self.g.m.pred())
+                                                               self.g.m.succ())
                         elif syntax == "arctl" :
                             if fair :
                                 checker = mc.FairARCTL_model_checker(self.g.reachable,
-                                                                     self.g.m.pred(),
+                                                                     self.g.m.succ(),
                                                                      fair)
                             else :
                                 checker = mc.ARCTL_model_checker(self.g.reachable,
-                                                                 self.g.m.pred())
+                                                                 self.g.m.succ())
                         else :
                             raise RuntimeError("unreachable code has been reached")
                         states = checker.check(phi)
+                        # TODO: add a log to explain what was obtained: all False, all True, real split False/True, in the latter case, tell which new component is False/True resp. Explain in the doc that when 0 => 0, N then 0 is the set of states that intersects the split set (or the reverse, to be checked)
+                        # TODO: add to table the set of formula that has been found True/False for each component (in a split, we can add Phi in the True part, and ~Phi in the False part)
+                        #TODO: add a method check that just checks a formula on a component and tells whether it is globally False/True on the component + add to the set of known formulas
                 log.update()
                 patch = self.g.split_states(num, states)
                 if not patch :
