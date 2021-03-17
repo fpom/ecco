@@ -3,3 +3,5 @@ __pycache__
 snapshot.py
 .*.swp
 /ecco/_ui.c
+/.python-version
+/docker/doc

@@ -1,3 +1,5 @@
+ * fixed Docker image
+
 ## Version 0.2
 
  * published as a Docker image
