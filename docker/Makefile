@@ -9,6 +9,11 @@ build:
 	docker build -t ecco .
 	rm -rf doc
 
+rebuild:
+	cp -af ../doc .
+	docker build --no-cache -t ecco .
+	rm -rf doc
+
 push:
 	docker tag ecco franckpommereau/ecco
 	docker push franckpommereau/ecco
