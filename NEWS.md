@@ -1,3 +1,4 @@
+ * improved example notebooks
  * fixed Docker image
 
 ## Version 0.2
