@@ -65,8 +65,8 @@ First, you should install all the dependencies:
  * [pydot](https://pypi.org/project/pydot/) (version tested: 1.4.1)
  * [pyddd](https://github.com/fpom/pyddd) (latest version)
  * [pyits](https://github.com/fpom/pyits) (latest version)
- * [pyits model-checker](https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker) (latest version)
  * [pytl](https://github.com/fpom/pytl) (latest version)
+ * [pyits model-checker](https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker) (latest version)
  * [ptnet](https://github.com/fpom/cunf-ptnet-py3) (latest version)
 
 Then, run `python setup.py install` as usual, or `pip install git+https://github.com/fpom/ecco.git` to install directly from the [GitHub repository](https://github.com/fpom/ecco).
