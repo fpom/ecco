@@ -43,7 +43,11 @@ The notebooks and example models are available in directory `doc`.
 
 This Docker image runs `ecco` on the top of a multi-user `JupyterHub` installation, you may reconfigure it according to you needs (in particular, to add users and data persistence).
 
-## Installation
+## Automated installation
+
+Just use the docker image from the quickstart above, change user `ecco`'s password or remove it's account, and create other accounts according to your needs.
+
+## Manual installation
 
 First, you should install all the dependencies:
 
