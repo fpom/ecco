@@ -2,7 +2,8 @@
 ECological COmputation
 """
 
-import functools, operator, pathlib, inspect
+import functools, pathlib, importlib
+
 from inspect import Signature, Parameter
 
 class CompileError (Exception) :
@@ -17,15 +18,6 @@ class ExprVisitor (object) :
             raise CompileError("unsupported operation %s" % expr.func.__name__)
         return handler(expr)
 
-def _methkey (item) :
-    return item[1].__code__.co_firstlineno
-
-def _propkey (item) :
-    try :
-        return item[1].fget.__code__.co_firstlineno
-    except AttributeError :
-        return 0
-
 def cached_property (method) :
     name = "_cached_%s" % method.__name__
     @functools.wraps(method)
@@ -35,41 +27,6 @@ def cached_property (method) :
         return getattr(self, name)
     return property(wrapper)
 
-def help (cls) :
-    doc = [None]
-    for name, meth in sorted(inspect.getmembers(cls, inspect.isdatadescriptor),
-                             key=_propkey) :
-        docstr = inspect.getdoc(meth)
-        if docstr and not name.startswith("_") :
-            doc.append(" - %s: %s" % (name, docstr.splitlines()[0]))
-    if doc[-1] is not None :
-        doc[0] = "Properties:"
-        doc.append(None)
-    for name, meth in sorted(inspect.getmembers(cls, inspect.isfunction),
-                             key=_methkey) :
-        docstr = inspect.getdoc(meth)
-        if docstr and not name.startswith("_") :
-            doc.append(" - %s: %s" % (name, docstr.splitlines()[0]))
-            spec = inspect.getfullargspec(meth)
-            ret = repr(spec.annotations.get("return", None))
-            if ret.startswith("<class ") :
-                ret = ret[8:-2]
-            elif ret.startswith("typing.Union[") :
-                ret = ret[13:-1].replace(", ", " | ")
-            if ret :
-                meth.__doc__ += "Return: %s" % ret
-    if doc[-1] is not None :
-        doc[doc.index(None)] = "Methods:"
-    else :
-        del doc[-1]
-    if doc :
-        if cls.__doc__ :
-            cls.__doc__ += "\n" + "\n".join(doc)
-        else :
-            cls.__doc__ = "\n".join(doc)
-    return cls
-
-@help
 class Record (object) :
     """Base class to store information.
     """
@@ -87,6 +44,11 @@ class Record (object) :
         self._args.apply_defaults()
         for key, val in self._args.arguments.items() :
             setattr(self, key, val)
+    def _del_cached_property (self, name) :
+        try :
+            delattr(self, "_cached_%s" % name)
+        except :
+            pass
     def __repr__ (self) :
         return "%s(%s)" % (self.__class__.__name__,
                            ", ".join("%s=%r" % item for item in self.items()))
@@ -126,19 +88,19 @@ class Record (object) :
                     with p.group(len(name)+1, "%s=" % name, "") :
                         p.pretty(value)
 
-@help
-class Model (Record) :
+class BaseModel (object) :
     """Store a model.
     Attributes:
      - path: file path from which the model was loaded
      - spec: the model itself
+     - base: base directory in which auxiliary files are stored
     """
-    _fields = ["path", "spec"]
-    _options = ["base"]
-    def __init__ (self, *l, **k) :
-        super().__init__(*l, **k)
-        if self.base is None :
-            self.base = pathlib.Path(self.path).with_suffix("")
+    def __init__ (self, path, spec, base=None) :
+        self.path = pathlib.Path(path)
+        self.spec = spec
+        if base is None :
+            base = self.path.with_suffix("")
+        self.base = base
         if not self.base.exists() :
             self.base.mkdir(parents=True)
     def __getitem__ (self, args) :
@@ -161,3 +123,11 @@ class Model (Record) :
             return self.base.joinpath(*("-".join(p) for p in parts)).with_suffix(ext)
         else :
             return self.base.joinpath(self.base.name).with_suffix(ext)
+
+def load (path) :
+    fmt = path.rsplit(".", 1)[-1].lower()
+    try :
+        module = importlib.import_module("." + fmt, "ecco")
+    except ModuleNotFoundError :
+        raise ValueError("unknown model format %r" % fmt)
+    return module, getattr(module, "Model", BaseModel)(path, module.parse(path))

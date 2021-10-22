@@ -121,18 +121,6 @@ DEFAULT_LAYOUT = "neato"
 ## graphs
 ##
 
-def to_graph (nodes, nodecol, edges, srccol, dstcol, data=True) :
-    g = nx.DiGraph()
-    if data :
-        g.add_nodes_from((n.pop(nodecol), n)
-                         for n in nodes.to_dict(orient="index").values())
-        g.add_edges_from((e.pop(srccol), e.pop(dstcol), e)
-                         for e in edges.to_dict(orient="index").values())
-    else :
-        g.add_nodes_from(nodes[nodecol])
-        g.add_edges_from(edges[[srccol, dstcol]].itertuples(index=False))
-    return g
-
 class CancelUpdate (Exception) :
     pass
 
@@ -180,24 +168,25 @@ def _to_apply (value) :
     return col, fun
 
 def _str (value) :
-    return str(value) or " "
+    if isinstance(value, (list, tuple, set, frozenset)) :
+        return ",".join(str(v) for v in value) or " "
+    else :
+        return str(value) or " "
 
 class Graph (Record) :
     _fields = ["nodes", "nodes_columns",
                "edges", "edges_columns",
                "nodecol", "srccol", "dstcol",
                "defaults"]
-    def __init__ (self, nodes, edges,
-                  nodecol="node", srccol="src", dstcol="dst", defaults={},
-                  **options) :
-        ncols = list(nodes.columns)
-        ecols = list(edges.columns)
-        super().__init__(nodes.copy(), ncols,
-                         edges.copy(), ecols,
-                         nodecol, srccol, dstcol,
+    def __init__ (self, nodes, edges, defaults={}, **options) :
+        assert len(nodes.index.names) == 1, "unsupported nodes index"
+        assert len(edges.index.names) == 2, "unsupported edges index"
+        super().__init__(nodes.reset_index(),
+                         [nodes.index.name] + list(nodes.columns),
+                         edges.reset_index(),
+                         list(edges.index.names) + list(edges.columns),
+                         nodes.index.name, *edges.index.names,
                          defaults)
-        self.nodes.reset_index(inplace=True)
-        self.edges.reset_index(inplace=True)
         self.opt = opt = getopt(options, self.defaults,
                                 gui_main=[["layout", "color", "palette"],
                                           ["label", "shape", "size"],
@@ -206,8 +195,9 @@ class Graph (Record) :
                                           "inspect"],
                                 fig_width=960,
                                 fig_height=600,
-                                fig_padding=0.01,
+                                fig_padding=0.1,
                                 fig_title=None,
+                                fig_background="#F7F7F7",
                                 graph_layout=DEFAULT_LAYOUT,
                                 graph_engines={},
                                 graph_directed=True,
@@ -255,10 +245,12 @@ class Graph (Record) :
             self.gui_figure.save_svg(str(path))
         else :
             raise ValueError("unsupported output format %r" % fmt)
-    def to_graph (self, data=False) :
-        return to_graph(self.nodes[self.nodes_columns], self.nodecol,
-                        self.edges[self.edges_columns], self.srccol, self.dstcol,
-                        data)
+    def to_graph (self) :
+        g = nx.DiGraph()
+        g.add_nodes_from(self.nodes[self.nodecol])
+        edges = self.edges[[self.srccol, self.dstcol]]
+        g.add_edges_from(edges.itertuples(index=False))
+        return g
     ##
     ## gui
     ##
@@ -380,6 +372,7 @@ class Graph (Record) :
                                        "bottom" : 0,
                                        "left" : 0,
                                        "right" : 0},
+                           background_style={"fill" : self.opt.fig.background},
                            title=title)
         return figure
     @cached_property
@@ -525,15 +518,16 @@ class Graph (Record) :
                 self.gui_move_nodes_x.value = nodes["_x"].mean()
                 self.gui_move_nodes_y.disabled = True
                 self.gui_move_nodes_y.value = nodes["_y"].mean()
-                display(nodes[cols])
+                display(nodes[cols].set_index(self.nodecol).sort_index())
                 self.gui_selected_nodes = nodes
         with self.gui_edges_inspect :
             clear_output()
             if self.gui_selected :
+                self.link_data # to generate _source/_target cols
                 cols = self.edges_columns
                 edges = self.edges[self.edges["_source"].isin(self.gui_selected)
                                    | self.edges["_target"].isin(self.gui_selected)]
-                display(edges[cols])
+                display(edges[cols].set_index([self.srccol, self.dstcol]).sort_index())
         self.gui_move_nodes_x.disabled = not self.gui_selected
         self.gui_move_nodes_y.disabled = not self.gui_selected
     def on_bg_click (self, graph, event) :
@@ -626,8 +620,9 @@ class Graph (Record) :
             count = self.marks_color.max() + 1
         else :
             count = self.marks_color.nunique()
+        count = min(int(count), 1024)
         if len(self._marks_palette) < count :
-            self._marks_palette = Palette.mkpal(self._marks_palette, int(count))
+            self._marks_palette = Palette.mkpal(self._marks_palette, count)
     @property
     def marks_size (self) :
         return self.nodes["_marks_size"]
@@ -771,13 +766,17 @@ class Graph (Record) :
             count = self.nodes_color.max() + 1
         else :
             count = self.nodes_color.nunique()
+        count = min(int(count), 1024)
         if len(self._nodes_palette) < count :
-            self._nodes_palette = Palette.mkpal(self._nodes_palette, int(count))
+            self._nodes_palette = Palette.mkpal(self._nodes_palette, count)
     @property
     def nodes_color (self) :
         return self.nodes["_color"]
     @nodes_color.setter
     def nodes_color (self, value) :
+        if (value in self.nodes.columns
+            and not np.issubdtype(self.nodes[value].dtype, np.number)) :
+            value = (value, col2num(self.nodes[value]))
         self._setter(self.nodes, "_color", value, astype=int)
     @property
     def nodes_size (self) :

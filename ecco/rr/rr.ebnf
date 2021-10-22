@@ -12,8 +12,12 @@ start =
 
 vdecl =
     name:word ":" {nl}+
-    decl:{varstate ":" description:/.*?$/ {nl}+}+
+    decl:{varinit ":" description:/.*?$/ {nl}+}+
     ;
+
+varinit =
+   variable:word state:/[*+-]/
+   ;
 
 varstate =
    variable:word state:/[+-]/

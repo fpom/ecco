@@ -11,7 +11,7 @@
 # the file is generated.
 
 
-from __future__ import print_function, division, absolute_import, unicode_literals
+from __future__ import generator_stop
 
 import sys
 
@@ -37,7 +37,7 @@ class rrBuffer(Buffer):
         namechars='',
         **kwargs
     ):
-        super(rrBuffer, self).__init__(
+        super().__init__(
             text,
             whitespace=whitespace,
             nameguard=nameguard,
@@ -61,12 +61,12 @@ class rrParser(Parser):
         parseinfo=True,
         keywords=None,
         namechars='',
-        buffer_class=rrBuffer,
+        tokenizercls=rrBuffer,
         **kwargs
     ):
         if keywords is None:
             keywords = KEYWORDS
-        super(rrParser, self).__init__(
+        super().__init__(
             whitespace=whitespace,
             nameguard=nameguard,
             comments_re=comments_re,
@@ -76,7 +76,7 @@ class rrParser(Parser):
             parseinfo=parseinfo,
             keywords=keywords,
             namechars=namechars,
-            buffer_class=buffer_class,
+            tokenizercls=tokenizercls,
             **kwargs
         )
 
@@ -98,7 +98,7 @@ class rrParser(Parser):
                     self._cdecl_()
                 with self._option():
                     self._rdecl_()
-                self._error('no available options')
+                self._error('expecting one of: cdecl rdecl')
         self._positive_closure(block4)
         self.name_last_node('rules')
 
@@ -122,7 +122,7 @@ class rrParser(Parser):
         self._positive_closure(block1)
 
         def block3():
-            self._varstate_()
+            self._varinit_()
             self._token(':')
             self._pattern('.*?$')
             self.name_last_node('description')
@@ -134,6 +134,17 @@ class rrParser(Parser):
         self.name_last_node('decl')
         self.ast._define(
             ['decl', 'description', 'name'],
+            []
+        )
+
+    @tatsumasu()
+    def _varinit_(self):  # noqa
+        self._word_()
+        self.name_last_node('variable')
+        self._pattern('[*+-]')
+        self.name_last_node('state')
+        self.ast._define(
+            ['state', 'variable'],
             []
         )
 
@@ -240,7 +251,7 @@ class rrParser(Parser):
                             self._pattern('.')
                         with self._option():
                             self._pattern("[^\\\\\\r\\n\\f']+")
-                        self._error('no available options')
+                        self._error("expecting one of: /[^\\\\\\r\\n\\f']+/ \\")
                 self._closure(block0)
                 self._token("'")
             with self._option():
@@ -253,10 +264,10 @@ class rrParser(Parser):
                             self._pattern('.')
                         with self._option():
                             self._pattern('[^\\\\\\r\\n\\f"]+')
-                        self._error('no available options')
+                        self._error('expecting one of: /[^\\\\\\r\\n\\f"]+/ \\')
                 self._closure(block2)
                 self._token('"')
-            self._error('no available options')
+            self._error('expecting one of: " \'')
 
 
 class rrSemantics(object):
@@ -264,6 +275,9 @@ class rrSemantics(object):
         return ast
 
     def vdecl(self, ast):  # noqa
+        return ast
+
+    def varinit(self, ast):  # noqa
         return ast
 
     def varstate(self, ast):  # noqa

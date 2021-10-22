@@ -1,28 +1,69 @@
-import itertools, re, os, tempfile, operator, functools, subprocess, warnings
+import itertools, re, tempfile, operator, functools, subprocess, warnings, pathlib
+import ptnet, prince, its, ddd
 import pandas as pd
 import numpy as np
-import ptnet
-import prince
-import its, ddd
-
-from hashlib import sha512
-from IPython.display import display
 import bqplot as bq
 import ipywidgets as ipw
-import networkx as nx
+import igraph as ig
 
-import tl, pymc as mc
+from collections import defaultdict
+from IPython.display import display
 
-from .. import Model as _Model, CompileError, Record, help, cached_property
-from .st import Parser, FailedParse, State
-from ..graphs import Graph, Palette, to_graph
-from ..ui import log, getopt, updated, HTML
-from .states import load
-from ..tables import read_csv, write_csv
-from .statexpr import expr2sdd
+from .. import BaseModel, cached_property, CompileError, load as load_model
+from ..graphs import Graph, Palette
+from ..ui import log, getopt, HTML
+from .lts import LTS, Component, setrel
+from . import ltsprop
+from .st import sign2char as s2c, Parser, FailedParse, State
 
-def _set2str (s) :
-    return "|".join(str(v) for v in sorted(s))
+class hset (object) :
+    "similar to frozenset with sorted values"
+    # work around pandas that does not display frozensets in order
+    def __init__ (self, iterable=(), key=None, reverse=False, sep=",") :
+        self._values = tuple(sorted(iterable, key=key, reverse=reverse))
+        self._sep = sep
+    def __iter__ (self) :
+        yield from iter(self._values)
+    def __bool__ (self) :
+        return bool(self._values)
+    def isdisjoint (self, other) :
+        return set(self).isdisjoint(set(other))
+    def issubset (self, other) :
+        return set(self).issubset(set(other))
+    def __le__ (self, other) :
+        return self.issubset(other)
+    def __lt__ (self, other) :
+        return set(self) < set(other)
+    def issuperset (self, other) :
+        return set(self).issuperset(set(other))
+    def __ge__ (self, other) :
+        return self.issuperset(other)
+    def __gt__ (self, other) :
+        return set(self) > set(other)
+    def union (self, *others) :
+        return self.__class__(set(self).union(*others))
+    def __or__ (self, other) :
+        return self.union(other)
+    def intersection (self, *others) :
+        return self.__class__(set(self).intersection(*others))
+    def __and__ (self, other) :
+        return self.intersection(other)
+    def difference (self, *others) :
+        return self.__class__(set(self).difference(*others))
+    def __sub__ (self, other) :
+        return self.difference(other)
+    def symmetric_difference (self, other) :
+        return self.__class__(set(self).symmetric_difference(other))
+    def __xor__ (self, other) :
+        return self.symmetric_difference(other)
+    def copy (self) :
+        return self
+    def __repr__ (self) :
+        return f"{self._sep} ".join(str(v) for v in self)
+    def _repr_pretty_ (self, pp, cycle) :
+        pp.text(f"{self._sep} ".join(str(v) for v in self))
+    def _ipython_display_ (self) :
+        display(f"{self._sep} ".join(str(v) for v in self))
 
 def parse (path, src=None) :
     try :
@@ -30,11 +71,11 @@ def parse (path, src=None) :
     except FailedParse as err :
         raise CompileError("\n".join(str(err).splitlines()[:3]))
 
-class TableProxy (Record) :
-    _fields = ["table", "columns"]
+class TableProxy (object) :
     _name = re.compile("^[a-z][a-z0-9_]*$", re.I)
     def __init__ (self, table) :
-        super().__init__(table, list(table.columns))
+        self.table = table
+        self.columns = list(table.columns)
     def __getitem__ (self, key) :
         if isinstance(key, str) :
             key = [key]
@@ -60,7 +101,7 @@ class TableProxy (Record) :
         if col in self.columns :
             display(HTML('<span style="color:#800; font-weight:bold;">warning:</span>'
                          ' you should not delete column %r,'
-                         ' but if you insist I\'ll do it.' % col))
+                         ' but if you insist I\'ll do it next time.' % col))
             self.columns.remove(col)
         elif isinstance(col, str) and col in self.table.columns :
             self.table.drop(columns=[col], inplace=True)
@@ -92,679 +133,10 @@ class TableProxy (Record) :
             self.table[key] = data
     def _ipython_display_ (self) :
         display(self[:])
+    def _repr_pretty_ (self, pp, cycle) :
+        return pp.text(repr(self[:]))
 
-class _View (Record) :
-    def _path (self, *args) :
-        if len(args) == 0 :
-            return self.base_path / self.name
-        elif len(args) == 1 :
-            parts, ext = (), args[0]
-        else :
-            *parts, ext = args
-        if not ext.startswith(".") :
-            ext = "." + ext
-        if parts :
-            return (self.base_path / "-".join(str(p) for p in parts)).with_suffix(ext)
-        else :
-            return (self.base_path / self.name).with_suffix(ext)
-
-@help
-class ExplicitView (_View) :
-    """a state-oriented view of a model (aka, a statespace)
-    Attributes:
-     - name: unique name of this view
-     - base_path: where data is saved path
-    """
-    _fields = ["name", "base_path"]
-    def __init__ (self, view, components) :
-        self.components = [view[c] for c in sorted(components)]
-        name = "explicit-" + "-".join(str(c.n) for c in self.components)
-        super().__init__(name=name,
-                         base_path=view.base_path / name)
-        if not self.base_path.exists() :
-            self.base_path.mkdir(parents=True)
-        self.v = view
-        self.g = view.g
-        self.m = view.m
-    def build (self, force=False) :
-        if force or updated([self.v._path("ddd")],
-                            [self._path("nodes", ".csv.bz2"),
-                             self._path("edges", ".csv.bz2")]) :
-            self.save()
-    def save (self) :
-        "save the nodes and edges tables to CSV"
-        self.g.dump_x(self.components,
-                      str(self._path("nodes", ".csv.bz2")),
-                      str(self._path("edges", ".csv.bz2")))
-    @cached_property
-    def nodes (self) :
-        return read_csv(self._path("nodes", ".csv.bz2"), state=self.m.state)
-    @cached_property
-    def edges (self) :
-        return read_csv(self._path("edges", ".csv.bz2"), state=self.m.state)
-    @cached_property
-    def n (self) :
-        return TableProxy(self.nodes)
-    @cached_property
-    def e (self) :
-        return TableProxy(self.edges)
-    def draw (self, **opt) :
-        """draw the view (component graph)
-        Figure options:
-         - fig_width (960): figure width (in pixels)
-         - fig_height (600): figure height (in pixels)
-         - fig_padding (0.01): internal figure margins
-         - fig_title (None): figure title
-        Graph options:
-         - graph_layout ("fdp"): layout engine to compute nodes positions
-        Nodes options:
-         - nodes_label ("node"): column that defines nodes labels
-         - nodes_shape (auto): column that defines nodes shape
-         - nodes_size (35): nodes width
-         - nodes_color ("component"): column that defines nodes colors
-         - nodes_selected ("#EE0000"): color of the nodes selected for inspection
-         - nodes_palette ("Pastel28"): palette for the nodes colors
-         - nodes_ratio (1.2): height/width ratio of non-symmetrical nodes
-        """
-        opt.setdefault("graph_engines", {})["CA"] = self.ca()
-        return Graph(self.nodes,
-                     self.edges,
-                     defaults={
-                         "nodes_color" : "component",
-                         "nodes_colorscale" : "discrete",
-                         "nodes_shape" : (["init", "dead", "scc", "hull"],
-                                          self._nodes_shape),
-                         "marks_shape" : (["init", "dead", "scc", "hull"],
-                                          self._marks_shape),
-                         "marks_palette" : ["#FFFFFF", "#000000"],
-                         "marks_opacity" : .5,
-                         "marks_stroke" : "#888888",
-                     }, **opt)
-    def _nodes_shape (self, row) :
-        if row.scc :
-            return "circ"
-        elif row.dead :
-            return "sbox"
-        else :
-            return "rbox"
-    def _marks_shape (self, row) :
-        if row.init :
-            return "triangle-down"
-        elif row.hull :
-            return "circle"
-    def count (self) :
-        """return a table with variable valuation for each state
-        """
-        variables = self.m.state.vars()
-        return pd.DataFrame.from_records(
-            [[int(v in s) for v in variables] for s in self.nodes["on"]],
-            index=self.nodes.index,
-            columns=variables)
-    def ca (self,
-            n_components=2, n_iter=3, copy=True, check_input=True,
-            engine="auto", random_state=42) :
-        """correspondence analysis of the count matrix
-
-        See https://github.com/MaxHalford/prince#correspondence-analysis-ca
-        for documentation about the options.
-        """
-        count = self.count()
-        count = count[count.sum(axis="columns") > 0]
-        ca = prince.CA(n_components=n_components,
-                       n_iter=n_iter,
-                       copy=copy,
-                       check_input=check_input,
-                       engine=engine,
-                       random_state=random_state)
-        ca.fit(count)
-        trans = ca.transform(count)
-        for idx in set(count.index) - set(trans.index) :
-            trans.loc[idx] = [0, 0]
-        return trans
-
-@help
-class ComponentView (_View) :
-    """a component-oriented view of a model (aka, a component graph)
-    Attributes:
-     - name: unique name of this view
-     - compact: whether transient states and constraints are hidden or not
-     - nodes_count: number of nodes
-     - edges_count: number of edges
-     - rr_path: path of RR specification
-    """
-    _fields = ["name", "compact", "universe", "rr_path", "base_path"]
-    def __init__ (self, name, model, **k) :
-        self.model = model
-        super().__init__(rr_path=model.path,
-                         base_path=model.base / name,
-                         name=name,
-                         **k)
-        self.base_path /= "compact" if self.compact else "expanded"
-        if not self.base_path.exists() :
-            self.base_path.mkdir(parents=True)
-    def __getitem__ (self, key) :
-        return self.g[key]
-    def __delitem__ (self, key) :
-        self.drop(self)
-    def __len__ (self) :
-        return self.g.nodes_count
-    def __iter__ (self) :
-        return iter(self.g)
-    ##
-    ## build and i/o
-    ##
-    def build (self, split: bool=True, force: bool=False, profile: bool=False) :
-        self.model.compile(force, profile)
-        mod = self.m = self.model.states
-        gal = self.model.gal_path()
-        if force or updated([self.rr_path], [gal]) :
-            force = True
-            self.model.gal()
-        if (force
-            or updated([self.rr_path], [self._path("ddd")])) :
-            force = True
-            self.g = mod.Graph(gal, self.compact, self.universe, True)
-            self.g.build(split)
-            self.g.save(str(self._path("ddd")))
-        else :
-            self.g = mod.Graph.load(str(self._path("ddd")))
-        self.nodes_count = self.g.nodes_count
-        self.edges_count = self.g.edges_count
-        if (force
-            or updated([self.rr_path],
-                       [self._path("nodes", "csv.bz2"),
-                        self._path("edges", "csv.bz2")])) :
-            self.g.to_csv(str(self._path("nodes", "csv.bz2")),
-                          str(self._path("edges", "csv.bz2")))
-        with log(head="<b>loading</b>",
-                 done_head="<b>loaded:</b>",
-                 tail="{step}",
-                 done_tail = "%s nodes / %s edges" % (self.nodes_count,
-                                                      self.edges_count),
-                 steps=[str(self._path("nodes", "csv.bz2")),
-                        str(self._path("edges", "csv.bz2"))],
-                 keep=True) :
-            self.nodes = read_csv(self._path("nodes", "csv.bz2"))
-            self.n = TableProxy(self.nodes)
-            log.update()
-            self.edges = read_csv(self._path("edges", "csv.bz2"))
-            self.e = TableProxy(self.edges)
-            log.update()
-    def save (self) :
-        "save the nodes and edges tables to CSV"
-        self.g.save()
-        write_csv(self.nodes, self._path("nodes", "csv.bz2"), self.m.state)
-        write_csv(self.edges, self._path("edges", "csv.bz2"), self.m.state)
-    def load (self) :
-        self.build(False, False)
-    def explicit (self, *components, force : bool = False) -> ExplicitView :
-        """build an explicit view of chosen components
-        Options:
-         - components (all): which components should be explicited
-        """
-        if not components :
-            components = [c.n for c in self.g]
-        dump = ExplicitView(self, components)
-        dump.build(force=force)
-        return dump
-    ##
-    ## draw
-    ##
-    def draw (self, **opt) :
-        """draw the view (component graph)
-        Figure options:
-         - fig_width (960): figure width (in pixels)
-         - fig_height (600): figure height (in pixels)
-         - fig_padding (0.01): internal figure margins
-         - fig_title (None): figure title
-        Graph options:
-         - graph_layout ("fdp"): layout engine to compute nodes positions
-        Nodes options:
-         - nodes_label ("node"): column that defines nodes labels
-         - nodes_shape (auto): column that defines nodes shape
-         - nodes_size (35): nodes width
-         - nodes_color ("size"): column that defines nodes colors
-         - nodes_selected ("#EE0000"): color of the nodes selected for inspection
-         - nodes_palette ("GRW"): palette for the nodes colors
-         - nodes_ratio (1.2): height/width ratio of non-symmetrical nodes
-        """
-        opt.setdefault("graph_engines", {})["PCA"] = self.pca()
-        return Graph(self.nodes,
-                     self.edges,
-                     defaults={
-                         "nodes_color" : "size",
-                         "nodes_colorscale" : "linear",
-                         "nodes_palette" : "GRW",
-                         "nodes_shape" : (["init", "dead", "scc", "hull"],
-                                          self._nodes_shape),
-                         "marks_shape" : (["init", "dead", "scc", "hull"],
-                                          self._marks_shape),
-                         "marks_palette" : ["#FFFFFF", "#000000"],
-                         "marks_opacity" : .5,
-                         "marks_stroke" : "#888888",
-                     }, **opt)
-    def _nodes_shape (self, row) :
-        if row.scc :
-            return "circ"
-        elif row.dead :
-            return "sbox"
-        else :
-            return "rbox"
-    def _marks_shape (self, row) :
-        if row.init :
-            return "triangle-down"
-        elif row.hull :
-            return "circle"
-    ##
-    ## analyse components
-    ##
-    def count (self, *nums: int) -> pd.DataFrame :
-        """count in how many states each variable is on in the components given
-        as arguments
-        Options:
-         - nums (all): components numbers
-        """
-        if not nums :
-            nums = [c.n for c in self.g]
-        compo = [self.g[n] for n in nums]
-        count = [c.count() for c in compo]
-        return pd.DataFrame.from_records([[c for _, c in cnt] for cnt in count],
-                                         index=[c.n for c in compo],
-                                         columns=[v for v, _ in count[0]])
-    def pca (self,
-             n_components=2, n_iter=3, copy=True, check_input=True,
-             engine="auto", random_state=42,
-             rescale_with_mean=True, rescale_with_std=True) :
-        """principal component analysis of the count matrix
-
-        See https://github.com/MaxHalford/prince#principal-component-analysis-pca
-        for documentation about the options.
-        """
-        count = self.count()
-        count = count[count.sum(axis="columns") > 0]
-        pca = prince.PCA(n_components=n_components,
-                         n_iter=n_iter,
-                         copy=copy,
-                         check_input=check_input,
-                         engine=engine,
-                         random_state=random_state,
-                         rescale_with_mean=rescale_with_mean,
-                         rescale_with_std=rescale_with_std)
-        pca.fit(count)
-        trans = pca.transform(count)
-        for idx in set(count.index) - set(trans.index) :
-            trans.loc[idx] = [0, 0]
-        return trans
-    ##
-    ## split components
-    ##
-    def _name2sdd (self, name: str) :
-        if name in self.g.variables :
-            return self.g[name]
-        elif re.match("^[RC][0-9]+$", name) :
-            rule = getattr(self.model.spec, "rules" if name[0] == "R"
-                           else "constraints")[int(name[1:]) - 1]
-            sdds = []
-            for state in rule.left :
-                if state.sign :
-                    sdds.append(self.g[state.name])
-                else :
-                    sdds.append(self.g["*"] - self.g[state.name])
-            return functools.reduce(operator.and_, sdds)
-        elif name == "*" :
-            return self.g["*"]
-        elif name == "DEAD" :
-            return self.g["#"]
-        else :
-            raise ValueError("unknown variable or rule name %r" % name)
-    def split (self, num: int, on: str="", normalise: bool=False, fair: object=None, keeplog=True) :
-        """split a component in two
-        Arguments:
-         - num: component number
-        Options:
-         - on: if not provided, the component is split into its SCC hull and the
-           related components. Otherwise, `on` should be either:
-           - a STATES expression, that is a Boolean expression such
-             that the atoms the atoms are:
-              - a variable name which selects the states in which the variable is 1
-              - name `DEAD` which selects deadlocks
-              - a rule/constraint name which selects the states in which the rule is
-                enabled (ie, may be executed)
-             and the operations are:
-              - `~expr` (NOT) which selects the states that are not selected
-                by `expr`
-              - `left | right` (OR) which selects the states that are in `left`,
-                `right`, or both
-              - `left & right` (AND) which selects the states that are both in
-                `left` and `right`
-              - `left ^ right` (XOR) which selects the states that are either in
-                `left` or `right` but not in both
-              - `(expr)` to group sub-expressions and enforce operators priorities
-           - a CTL formula or an ARCTL formula (see
-             https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker
-             for details)
-           Note that a formula may be valid for the three syntaxes, so it is checked
-           against (1) CTL syntax, (2) ARCTL syntax, and (3) STATES syntax. So if one
-           provides a STATES formula that is also a valide CTL formula, it will be
-           detected as such.
-         - normalise (False): extract the SCC hull and related components from
-           the components resulting from the split when `on` is provided
-         - fair (None): if not `None` and if `on` is a (AR)CTL formula, a fair
-           model-checker is used and this argument is passed to its constructor as
-           its `fairness` argument, see
-           https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker
-        """
-        with log(head="splitting",
-                 tail="{step} (TIME: {time} | MEM: {memory:.1f}%)",
-                 done_head = "<b>split:</b>",
-                 steps=["compiling expression", "splitting component",
-                        "extracting SCC hulls", "updating tables"],
-                 keep=keeplog) :
-            if on :
-                try :
-                    phi = tl.parse(on)
-                    try :
-                        phi = phi.ctl()
-                        syntax = "ctl"
-                        log.print("detected CTL syntax", "info")
-                    except :
-                        phi = phi.arctl()
-                        syntax = "arctl"
-                        log.print("detected ARCTL syntax", "info")
-                except :
-                    syntax = "states"
-                    log.print("detected STATES syntax", "info")
-                if syntax == "states" :
-                    states = expr2sdd(on, self._name2sdd)
-                else :
-                    with warnings.catch_warnings() :
-                        warnings.simplefilter("ignore")
-                        if syntax == "ctl" :
-                            if fair :
-                                checker = mc.FairCTL_model_checker(self.g.reachable,
-                                                                   self.g.m.succ(),
-                                                                   fair)
-                            else :
-                                checker = mc.CTL_model_checker(self.g.reachable,
-                                                               self.g.m.succ())
-                        elif syntax == "arctl" :
-                            if fair :
-                                checker = mc.FairARCTL_model_checker(self.g.reachable,
-                                                                     self.g.m.succ(),
-                                                                     fair)
-                            else :
-                                checker = mc.ARCTL_model_checker(self.g.reachable,
-                                                                 self.g.m.succ())
-                        else :
-                            raise RuntimeError("unreachable code has been reached")
-                        states = checker.check(phi)
-                        # TODO: add a log to explain what was obtained: all False, all True, real split False/True, in the latter case, tell which new component is False/True resp. Explain in the doc that when 0 => 0, N then 0 is the set of states that intersects the split set (or the reverse, to be checked)
-                        # TODO: add to table the set of formula that has been found True/False for each component (in a split, we can add Phi in the True part, and ~Phi in the False part)
-                        #TODO: add a method check that just checks a formula on a component and tells whether it is globally False/True on the component + add to the set of known formulas
-                log.update()
-                patch = self.g.split_states(num, states)
-                if not patch :
-                    log.finish(done_tail="%s cannot be split (TIME: {time})" % num)
-                    return
-                log.update()
-                # normalise result
-                if normalise :
-                    compo = list(patch)
-                    for c in compo :
-                        p = self.g.split_hull(c)
-                        patch.components.extend(p.components[1:])
-                        patch += p
-            else :
-                log.update(2)
-                patch = self.g.split_hull(self.g[num])
-                if not patch :
-                    log.finish(done_tail="%s cannot be split (TIME: {time})" % num)
-                    return
-            log.update()
-            self._patch_tables(patch)
-            log.done_tail = "%s => %s (TIME: {time})" % (num, ", ".join(str(c.n)
-                                                                        for c in patch))
-            log.update()
-    def _patch_tables (self, patch) :
-        # update nodes table
-        for compo in patch.components :
-            on, off = compo.on_off()
-            succ = self.g.getsucc(compo.n)
-            pred = self.g.getpred(compo.n)
-            row = {"node" : compo.n,
-                   "size" : len(compo),
-                   "succ" : "|".join(str(s) for s in sorted(succ)),
-                   "pred" : "|".join(str(s) for s in sorted(pred)),
-                   "on" : on,
-                   "off" : off,
-                   "init" : compo.init,
-                   "dead" : compo.dead,
-                   "scc" : compo.scc,
-                   "hull" : compo.hull}
-            found = self.nodes[self.nodes["node"] == compo.n]
-            if len(found) :
-                idx = found.index[0]
-            else :
-                idx = self.nodes.index.max() + 1
-            self.nodes.loc[idx] = [row.get(c) for c in self.nodes.columns]
-        self.nodes_count = self.g.nodes_count
-        # update edges table
-        edges = self.edges[["src", "dst"]].apply(tuple, axis="columns")
-        self.edges.drop(index=self.edges[edges.isin(patch.rem)].index,
-                        inplace=True)
-        for src, dst in patch.add :
-            self._add_edges(src, dst)
-        self.edges_count = self.g.edges_count
-    def _add_edges (self, src, dst) :
-        if not isinstance(src, int) :
-            src = src.n
-        if not isinstance(dst, int) :
-            dst = dst.n
-        if src == dst :
-            return
-        rules = self.g[src,dst]
-        if not rules :
-            return
-        row = {"src" : src,
-               "dst" : dst,
-               "rule" : "|".join(sorted(rules))}
-        if len(self.edges) :
-            idx = self.edges.index.max() + 1
-        else :
-            idx = 0
-        self.edges.loc[idx] = [row.get(c) for c in self.edges.columns]
-    def merge (self, one, two, *rest) :
-        """merge components
-        Arguments:
-         - one, two, ...: two or more component numbers
-        """
-        compo = [self.g[n] for n in (one, two) + rest]
-        with log(head="merging",
-                 tail="{step} (TIME: {time} | MEM: {memory:.1f}%)",
-                 done_head="<b>merged:</b>",
-                 done_tail=("%s => %s (TIME: {time})"
-                            % (", ".join(str(c.n) for c in compo), compo[0].n)),
-                 steps=["merging components", "updating tables"],
-                 keep=True) :
-            patch = self.g.merge(compo)
-            log.update()
-            # update nodes table
-            drop = set(c.n for c in patch.components[1:])
-            self.nodes.drop(index=self.nodes[self.nodes["node"].isin(drop)].index,
-                            inplace=True)
-            keep = patch.components[0]
-            on, off = keep.on_off()
-            succ = self.g.getsucc(keep.n)
-            pred = self.g.getpred(keep.n)
-            row = {"node" : keep.n,
-                   "size" : len(keep),
-                   "succ" : "|".join(str(s) for s in sorted(succ)),
-                   "pred" : "|".join(str(s) for s in sorted(pred)),
-                   "on" : on,
-                   "off" : off,
-                   "init" : keep.init,
-                   "dead" : keep.dead,
-                   "scc" : keep.scc,
-                   "hull" : keep.hull}
-            found = self.nodes[self.nodes["node"] == keep.n]
-            if len(found) :
-                idx = found.index[0]
-            else :
-                idx = self.nodes.index.max() + 1
-            self.nodes.loc[idx] = [row.get(c) for c in self.nodes.columns]
-            self.nodes_count = self.g.nodes_count
-            # update edges table
-            edges = self.edges[["src", "dst"]].apply(tuple, axis="columns")
-            self.edges.drop(index=self.edges[edges.isin(patch.rem)].index,
-                            inplace=True)
-            for src, dst in patch.add :
-                self._add_edges(src, dst)
-            self.edges_count = self.g.edges_count
-            log.update()
-    def drop (self, first, *others) :
-        """remove components
-        Arguments:
-         - first, ...: one or more components to remove
-        """
-        compo = [self.g[n] for n in (first,) + others]
-        with log(head="dropping",
-                 tail="{step} (TIME: {time} | MEM: {memory:.1f}%)",
-                 done_head="<b>dropped:</b>",
-                 done_tail=("%s (TIME: {time})" % ", ".join(str(c.n) for c in compo)),
-                 steps=["#%s" % c.n for c in compo] + ["updating tables"],
-                 keep=True) :
-            for c in compo :
-                self.g.del_compo(c.n)
-                log.update()
-            # update nodes table
-            drop = set(c.n for c in compo)
-            self.nodes.drop(index=self.nodes[self.nodes["node"].isin(drop)].index,
-                            inplace=True)
-            _dropn = re.compile("|".join("(\A|\D)%s(\D|\Z)" % n for n in drop))
-            _dropb = re.compile("\\|{2,}")
-            def _drop (s) :
-                return _dropb.sub("|", _dropn.sub("", s)).strip("|")
-            for col in ("succ", "pred") :
-                self.nodes[col] = self.nodes[col].apply(_drop)
-            self.nodes_count = self.g.nodes_count
-            # update edges table
-            self.edges.drop(index=self.edges[self.edges["src"].isin(drop)
-                                             | self.edges["dst"].isin(drop)].index,
-                            inplace=True)
-            self.edges_count = self.g.edges_count
-            log.update()
-    def search (self, *states, col=None) :
-        """search states through all the components and separate them
-        Arguments:
-         - states...: specification of searched states as in method split
-        Options:
-         - col (None): if not None, adds the result of search to a new column
-        Return: a DataFrame summarising which states have been found in which components
-        """
-        with log(head="searching",
-                 done_head="<b>found:</b>",
-                 tail="{step} (TIME: {time} | MEM: {memory:.1f}%)",
-                 steps=["%r" % s for s in states] + ["matching"]) :
-            splitters = []
-            for st in states :
-                todo = [(c.n, c.s) for c in self]
-                split = expr2sdd(st, self._name2sdd)
-                splitters.append(split)
-                for num, sdd in todo :
-                    core = sdd & split
-                    if core :
-                        rest = sdd - core
-                        succ = (self.g.succ_s & sdd)(core) & rest
-                        rest -= succ
-                        pred = (self.g.pred_s & sdd)(core) & rest
-                        tosplit = num
-                        for split in (s for s in (core, succ, pred) if s) :
-                            patch = self.g.split_states(tosplit, split)
-                            if patch :
-                                self._patch_tables(patch)
-                                tosplit = patch[-1].n
-                    log.update()
-            found = {}
-            if col is None :
-                def _has (row) :
-                    c = self[row.node]
-                    for i, s in enumerate(splitters) :
-                        if c.s & s :
-                            found.setdefault(i, set()).add(row.node)
-                self.nodes.apply(_has, axis=1)
-            else :
-                def _has (row) :
-                    h = []
-                    c = self[row.node]
-                    for i, s in enumerate(splitters) :
-                        if c.s & s :
-                            h.append(str(i))
-                            found.setdefault(i, set()).add(row.node)
-                    return "|".join(h)
-                self.n[col] = _has
-            for i, st in enumerate(states) :
-                if not found.get(i) :
-                    log.warn("%r not found" % st)
-            return pd.DataFrame.from_records(((st, i, found.get(i, None))
-                                              for i, st in enumerate(states)),
-                                             columns=["query", "index", "matches"])
-    def search_path (self, *states, col=None, prune=True) :
-        """as search plus tries to find a path through the states
-        Arguments:
-         - states...: specification of searched states as in method split
-        Options:
-         - col (None): if not None, adds the result of search to a new column
-         - prune (True): remove states and edges not involved in found path
-        Return: a list of lists, each of which being a path from one searched state
-           to another (except for the first one that is from the initial state to the
-           first searched state)
-        """
-        found = self.search(*states, col=col)
-        col = found.columns[-1]
-        stops = ([set(c.n for c in self if c.init)]
-                 + [row[col] for _, row in found.iterrows() if row[col]])
-        if len(stops) < 2 :
-            log.err("no path")
-            return
-        g = to_graph(self.nodes, "node", self.edges, "src", "dst", data=False)
-        path = self._search_path(g, *stops)
-        if prune :
-            drop = set(c.n for c in self)
-            for p in path :
-                drop.difference_update(p)
-            self.drop(*drop)
-            keep = set()
-            for p in path :
-                keep.update(zip(p, p[1:]))
-            self.edges["_"] = self.edges[["src", "dst"]].apply(tuple, axis=1)
-            drop = self.edges[~self.edges["_"].isin(keep)].index
-            self.edges.drop(index=drop, inplace=True)
-            self.edges.drop(columns=["_"], inplace=True)
-        text = ['<span style="color:#000088;">init</span>', "="]
-        for s, p in zip(states, path) :
-            text.append(" &gt; ".join("<code>%s</code>" % n for n in p))
-            text.append("~")
-            text.append('<span style="color:#000088;">%s</span>' % s)
-            text.append("~")
-        text.pop(-1)
-        log.info(" ".join(text))
-        return path
-    def _search_path (self, g, one, two, *rest) :
-        for src in one :
-            for dst in two :
-                try :
-                    start = nx.shortest_path(g, src, dst)
-                except nx.NetworkXNoPath :
-                    continue
-                if not rest :
-                    return [start]
-                suite = self._search_path(g, {dst}, *rest)
-                if suite :
-                    return [start] + suite
-        return []
-
-@help
-class Model (_Model) :
+class Model (BaseModel) :
     ##
     ## RR
     ##
@@ -782,41 +154,54 @@ class Model (_Model) :
                     h.write("%s:" % sect)
                 for d in decl :
                     h.write("    ")
-                    color = "#080" if d.state.sign else "#800"
+                    if d.state.sign is None :
+                        color = "#008"
+                    elif d.state.sign :
+                        color = "#080"
+                    else :
+                        color = "#800"
                     with h("span", style="color:%s;" % color) :
                         h.write("%s" % d.state)
                     h.write(": %s\n" % d.description)
             for sect in ("constraints", "rules") :
                 rules = getattr(self.spec, sect)
-                with h("span", style="color:#008; font-weight:bold;", BREAK=True) :
-                    h.write("%s:" % sect)
-                for rule in rules :
-                    h.write("    ")
-                    for i, s in enumerate(rule.left) :
-                        if i :
-                            h.write(", ")
-                        color = "#080" if s.sign else "#800"
-                        with h("span", style="color:%s;" % color) :
-                            h.write(str(s))
-                    with h("span", style="color:#008; font-weight:bold;") :
-                        h.write(" &gt;&gt; ")
-                    for i, s in enumerate(rule.right) :
-                        if i :
-                            h.write(", ")
-                        color = "#080" if s.sign else "#800"
-                        with h("span", style="color:%s;" % color) :
-                            h.write(str(s))
-                    with h("span", style="color:#888;") :
-                        h.write("   # %s" % rule.name())
-                    h.write("\n")
+                if rules:
+                    with h("span", style="color:#008; font-weight:bold;", BREAK=True) :
+                        h.write("%s:" % sect)
+                    for rule in rules :
+                        h.write("    ")
+                        if (rule.label or "").strip() :
+                            with h("span", style="color:#888; font-weight:bold;") :
+                                h.write("[%s] " % rule.label.strip())
+                        for i, s in enumerate(rule.left) :
+                            if i :
+                                h.write(", ")
+                            color = "#080" if s.sign else "#800"
+                            with h("span", style="color:%s;" % color) :
+                                h.write(str(s))
+                        with h("span", style="color:#008; font-weight:bold;") :
+                            h.write(" &gt;&gt; ")
+                        for i, s in enumerate(rule.right) :
+                            if i :
+                                h.write(", ")
+                            color = "#080" if s.sign else "#800"
+                            with h("span", style="color:%s;" % color) :
+                                h.write(str(s))
+                        with h("span", style="color:#888;") :
+                            h.write("   # %s" % rule.name())
+                        h.write("\n")
         return h
-    def charact (self, constraints: bool=True) -> pd.DataFrame :
+    def charact (self, constraints: bool=True, variables=None) -> pd.DataFrame :
         """compute variables static characterisation
         Options:
          - constraint (True): take constraints into account
+         - variables (None): the list of variables to be displayed, or all if None
         Return: a DataFrame which the counts characterising each variable
         """
-        index = list(sorted(s.state.name for s in self.spec.meta))
+        if variables is None :
+            index = list(sorted(s.state.name for s in self.spec.meta))
+        else :
+            index = list(variables)
         counts = pd.DataFrame(index=index,
                               data={"init" : np.full(len(index), 0),
                                     "left_0" : np.full(len(index), 0),
@@ -824,7 +209,7 @@ class Model (_Model) :
                                     "right_0" : np.full(len(index), 0),
                                     "right_1" : np.full(len(index), 0)})
         for s in self.spec.meta :
-            if s.state.sign :
+            if s.state.name in index and s.state.sign :
                 counts.loc[s.state.name,"init"] = 1
         if constraints :
             todo = [self.spec.constraints, self.spec.rules]
@@ -833,13 +218,15 @@ class Model (_Model) :
         for rule in itertools.chain(*todo) :
             for side in ["left", "right"] :
                 for state in getattr(rule, side) :
-                    sign = "_1" if state.sign else "_0"
-                    counts.loc[state.name,side+sign] += 1
+                    if state.name in index :
+                        sign = "_1" if state.sign else "_0"
+                        counts.loc[state.name,side+sign] += 1
         return counts
-    def draw_charact (self, constraints: bool=True, **options) :
+    def draw_charact (self, constraints: bool=True, variables=None, **options) :
         """draw a bar chart of nodes static characterization
         Options:
-         - constraint (True): take constraints into account
+         - constraints (True): take constraints into account
+         - variables (None): the list of variables to be displayed, or all if None
         Figure options:
          - fig_width (960): figure width (in pixels)
          - fig_height (300): figure height (in pixels)
@@ -856,11 +243,11 @@ class Model (_Model) :
                                 fig_title=None,
                                 bar_spacing=1,
                                 bar_palette="RGW")
-        counts = self.charact(constraints)
+        counts = self.charact(constraints, variables)
         shift = (counts["left_0"] + counts["left_1"]).max() + opt.bar.spacing
         last = shift + (counts["right_0"] + counts["right_1"]).max()
         xs = bq.OrdinalScale(reverse=True)
-        ys = bq.LinearScale(min=-opt.bar.spacing, max=last+1)
+        ys = bq.LinearScale(min=-opt.bar.spacing, max=float(last+1))
         bar_left = bq.Bars(x=counts.index,
                            y=[counts["left_0"], counts["left_1"]],
                            scales={"x": xs, "y": ys},
@@ -874,7 +261,7 @@ class Model (_Model) :
                             padding=0.1,
                             colors=Palette.mkpal(opt.bar.palette, 2),
                             orientation="horizontal",
-                            base=shift)
+                            base=float(shift))
         ax_left = bq.Axis(scale=xs, orientation="vertical", grid_lines="none",
                           side="left", offset={"scale": ys, "value": 0})
         ax_right = bq.Axis(scale=xs, orientation="vertical", grid_lines="none",
@@ -909,7 +296,7 @@ class Model (_Model) :
          - overwrite (True): whether path should be overwritten if it exists
         """
         self.spec.save(target, overwrite)
-    def inline (self, path: str, *constraints, overwrite: bool=False) -> _Model :
+    def inline (self, path: str, *constraints, overwrite: bool=False) :
         """inline constraints into the rules
         Arguments:
          - path: where to save the generated RR file
@@ -925,36 +312,30 @@ class Model (_Model) :
     ##
     ## state space methods
     ##
-    def __call__ (self, name:str,
-                  compact: bool=True,
-                  split: bool=True,
-                  universe: bool=False,
-                  force: bool=False,
-                  profile: bool=False) -> ComponentView :
-        """build a named view of the model
+    def __call__ (self, *l, **k) :
+        """build a `ComponentGraph` from the model
+
         Arguments:
-         - name: directory where view's data is stored
-        Options:
-         - split (True): split SCC hull and related components
-         - force (False): rebuild from scratch (instead of reloading
-           from files)
-         - compact (True): whether the view hides transient states and
-           constraints or not
+         - `compact` (`True`): whether transient states should be removed and
+           transitions rules adjusted accordingly
+         - `init` (`""`): initial states of the LTS. If empty: take them from
+           the model. Otherwise, it must be a comma-separated sequence of states
+           assignements, that is interpreted as successive assignements starting
+           from the initial states specified in the model. Each assignement be either:
+           - `"*"`: take all the potential states (so called universe)
+           - `"+"`: set all variables to "+"
+           - `"-"`: set all variables to "-"
+           - `VARx`, where `VAR` is a variable name and `x` is a sign in `+`, `-`,
+             or `*`: set variable as specified by the sign
+           For instance, sequence `"*,V+,W-` will consider all the pontential states
+           restricted to those where `V` is `+` and `W` is `-`.
+           A list of such strings may be used, in which case the union of the
+           corresponding sets of states is considered.
+         - `split` (`True`): should the graph be initially split into its initial
+           states, SCC hull, and deadlocks+basins
+        Returns: newly created `ComponentGraph` instance
         """
-        if compact and not self.spec.constraints :
-            log.warn("model has no constraints, setting <code>compact=False</code>")
-            compact = False
-        view = ComponentView(name, self, compact=compact, universe=universe)
-        view.build(split=split, force=force, profile=profile)
-        return view
-    def compile (self, force=False, profile=False) :
-        with log(head="<b>compiling</b>",
-                 tail=self.path,
-                 done_head="<b>loaded:</b>",
-                 done_tail=self.path) :
-            src_hash = sha512(open(self.path, "rb").read()).hexdigest()
-            self.states = load(self.spec, self.path, self.base,
-                               src_hash, force, profile)
+        return ComponentGraph.from_model(self, *l, **k)
     def gal_path (self, compact=False, permissive=False) :
         return str(self[("c" if compact else "")
                         + ("p" if permissive else "")
@@ -971,7 +352,7 @@ class Model (_Model) :
             # variables
             for sort in self.spec.meta :
                 out.write(f"    // {sort.state}: {sort.description} ({sort.kind})\n"
-                          f"    int {sort.state.name} = {sort.state.sign:d};\n")
+                          f"    int {sort.state.name} = {bool(sort.state.sign):d};\n")
                 if permissive :
                     out.write(f"    int {sort.state.name}_flip = 0;\n")
                     if self.spec.constraints :
@@ -996,7 +377,8 @@ class Model (_Model) :
                 loop = " && ".join(f"({s.name} == {s.sign:d})"
                                    for s in const.right)
                 out.write(f"    // {const}\n"
-                          f"    transition C{const.num} [{guard} && (!({loop}))]"
+                          f"    transition C{const.num} "
+                          f"[{guard} && (!({loop}))]"
                           f"{label}{{\n")
                 for s in const.right :
                     out.write(f"        {s.name} = {s.sign:d};\n")
@@ -1015,8 +397,11 @@ class Model (_Model) :
                               f"    }}\n")
                     ptrans.append(f"{sort.state.name}_FLIP == 1")
             if compact :
-                out.write(f"    // identity for fixpoints\n"
-                          f'    transition ID [true] label "const" {{ }}\n')
+                out.write(f"    // constraints + identity for fixpoints in rules\n"
+                          f'    transition Cx [true] label "rconst" {{\n'
+                          f'        self."const";'
+                          f'    }}\n'
+                          f'    transition ID [true] label "rconst" {{ }}\n')
             # rules
             if ctrans or ptrans :
                 prio = " && (!(%s))" % " || ".join(f"({g})"
@@ -1043,7 +428,7 @@ class Model (_Model) :
                         out.write(f"        {s.name}_flip = 1;\n")
                 if compact :
                     out.write("        fixpoint {\n"
-                              '            self."const";\n'
+                              '            self."rconst";\n'
                               "        }\n")
                 out.write("    }\n")
             if permissive :
@@ -1056,6 +441,10 @@ class Model (_Model) :
                     ptrans.append(f"{sort.state.name}_flip == 1")
             transient = []
             if compact :
+                out.write("    //*** skip transient initial states ***//\n"
+                          "    transition __INIT__ [true] {\n"
+                          '        self."const";\n'
+                          "    }\n")
                 transient.extend(ctrans)
             if permissive :
                 transient.extend(ptrans)
@@ -1214,7 +603,7 @@ class Model (_Model) :
         Figure options:
          - fig_width (960): figure width (in pixels)
          - fig_height (600): figure height (in pixels)
-         - fig_padding (0.01): internal figure margins
+         - fig_padding (0.1): internal figure margins
          - fig_title (None): figure title
         Graph options:
          - graph_layout ("circo"): layout engine to compute nodes positions
@@ -1228,8 +617,11 @@ class Model (_Model) :
          - nodes_ratio (1.2): height/width ratio of non-symmetrical nodes
         """
         nodes = []
-        for state in sorted(s.state for s in self.spec.meta) :
-            nodes.append((state.name, state.sign))
+        for sort in sorted(self.spec.meta, key=lambda s : s.state.name) :
+            nodes.append({"node" : sort.state.name,
+                          "init" : sort.state.sign,
+                          "category" : sort.kind,
+                          "description" : sort.description})
         edges = []
         if constraints :
             todo = [self.spec.constraints, self.spec.rules]
@@ -1238,10 +630,10 @@ class Model (_Model) :
         for rule in itertools.chain(*todo) :
             for src in rule.left :
                 for dst in rule.right :
-                    edges.append((src.name, dst.name, rule.name(), rule.text()))
-        return Graph(pd.DataFrame.from_records(nodes, columns=["node", "init"]),
-                     pd.DataFrame.from_records(edges,
-                                               columns=["src", "dst", "rule", "rr"]),
+                    edges.append({"src" : src.name, "dst" : dst.name,
+                                  "rule" : rule.name(), "rr" : rule.text()})
+        return Graph(pd.DataFrame.from_records(nodes, index="node"),
+                     pd.DataFrame.from_records(edges, index=["src", "dst"]),
                      defaults={
                          "graph_layout" : "circo",
                          "nodes_color" : "init",
@@ -1257,7 +649,7 @@ class Model (_Model) :
         Figure options:
          - fig_width (960): figure width (in pixels)
          - fig_height (600): figure height (in pixels)
-         - fig_padding (0.01): internal figure margins
+         - fig_padding (0.1): internal figure margins
          - fig_title (None): figure title
         Graph options:
          - graph_layout ("fdp"): layout engine to compute nodes positions
@@ -1272,36 +664,40 @@ class Model (_Model) :
         else :
             rules = list(self.spec.rules)
         for state, desc in sorted((s.state, s.description) for s in self.spec.meta) :
-            nodes.append((state.name, desc, "circ", 0 if state.sign else 1))
+            nodes.append({"node" : state.name,
+                          "info" : desc,
+                          "shape" : "circ",
+                          "color" : 0 if state.sign else 1})
         for rule in rules :
             name = rule.name()
-            nodes.append((name, rule.text(), "sbox", 2 if name[0] == "C" else 3))
+            nodes.append({"node" : name,
+                          "info" : rule.text(),
+                          "shape" : "sbox",
+                          "color" : 2 if name[0] == "C" else 3})
             for var in set(s.name for s in itertools.chain(rule.left, rule.right)) :
                 v0 = State(var, False)
                 v1 = State(var, True)
                 if v1 in rule.left :
                     if v1 in rule.right :
-                        edges.append((var, name, "*", "*"))
+                        start, end = "**"
                     elif v0 in rule.right :
-                        edges.append((var, name, "o", "*"))
+                        start, end = "o*"
                     else :
-                        edges.append((var, name, "-", "*"))
+                        start, end = "-*"
                 elif v0 in rule.left :
                     if v1 in rule.right :
-                        edges.append((var, name, "*", "o"))
+                        start, end = "*o"
                     elif v0 in rule.right :
-                        edges.append((var, name, "o", "o"))
+                        start, end = "oo"
                     else :
-                        edges.append((var, name, "-", "o"))
+                        start, end = "-o"
                 elif v1 in rule.right :
-                    edges.append((var, name, "*", "-"))
+                    start, end = "*-"
                 elif v0 in rule.right :
-                    edges.append((var, name, "o", "-"))
-        return Graph(pd.DataFrame.from_records(nodes,
-                                               columns=["node", "info", "shape",
-                                                        "color"]),
-                     pd.DataFrame.from_records(edges,
-                                               columns=["src", "dst", "get", "set"]),
+                    start, end = "o-"
+                edges.append({"src" : var, "dst" : name, "get" : start, "set" : end})
+        return Graph(pd.DataFrame.from_records(nodes, index="node"),
+                     pd.DataFrame.from_records(edges, index=["src", "dst"]),
                      defaults={
                          "graph_layout" : "fdp",
                          "graph_directed" : False,
@@ -1349,9 +745,871 @@ class Model (_Model) :
              tempfile.NamedTemporaryFile("rb") as cuf :
             n.write(pep)
             pep.flush()
-            os.system("cunf -s %s %s" % (cuf.name, pep.name))
+            subprocess.run(["cunf", "-s", cuf.name, pep.name])
             u = ptnet.unfolding.Unfolding()
             u.read(cuf)
         return u
 
-__extra__ = ["Model", "ComponentView", "ExplicitView", "parse", "Palette"]
+class _GCS (set) :
+    "a subclass of set that is tied to a component graph so it has __invert__"
+    components = set()
+    def __invert__ (self) :
+        return self.__class__(self.components - self)
+    def __and__ (self, other) :
+        return self.__class__(super().__and__(other))
+    def __or__ (self, other) :
+        return self.__class__(super().__or__(other))
+    def __xor__ (self, other) :
+        return self.__class__(super().__xor__(other))
+
+def _rulekey (r) :
+    return (r[0], int(r[1:]))
+
+class NodesTableProxy (TableProxy) :
+    def __init__ (self, compograph, table, name="nodes") :
+        super().__init__(table)
+        self._c = compograph
+        self._n = name
+    def __call__ (self, col, fun=None) :
+        if fun is None :
+            series = self.table[col].astype(bool)
+        else :
+            series = self.table[col].apply(fun).astype(bool)
+        return self._c._GCS(self.table.index[series])
+    def __getattr__ (self, name) :
+        if name in self.table.columns :
+            return functools.partial(self.__call__, name)
+        else :
+            raise AttributeError(f"table {self._n!r} has no column {name!r}")
+
+class ComponentGraph (object) :
+    def __init__ (self, model, compact=True, init="", lts=None, **k) :
+        """create a new instance
+
+        This method is not intended to be used directly, but it will be called by
+        the other methods. Use `from_model` class method if you whish to create a
+        component graph from scratch.
+        """
+        self.model = model
+        if compact and not self.model.spec.constraints :
+            log.warn("model has no constraints, setting <code>compact=False</code>")
+            compact = False
+        if lts is None :
+            self.lts = LTS(self.model.gal(), init, compact)
+        else :
+            self.lts = lts
+        self.components = ()
+        self.compact = compact
+        self._c = {} # Component.num => Component
+        self._g = {} # Component.num => Vertex
+    @classmethod
+    def from_model (cls, model, compact=True, init="", split=True) :
+        """create a `ComponentGraph` from a `Model` instance
+
+        Arguments:
+         - `model`: a `Model` instance
+         - `compact` (`True`): whether transient states should be removed and
+           transitions rules adjusted accordingly
+         - `init` (`str:""`): initial states of the LTS. If empty: take them from
+           the model. Otherwise, it must be a comma-separated sequence of states
+           assignements, that is interpreted as successive assignements starting
+           from the initial states specified in the model. Each assignement be either:
+           - `"*"`: take all the potential states (so called universe)
+           - `"+"`: set all variables to "+"
+           - `"-"`: set all variables to "-"
+           - `VARx`, where `VAR` is a variable name and `x` is a sign in `+`, `-`,
+             or `*`: set variable as specified by the sign
+           For instance, sequence `"*,V+,W-` will consider all the pontential states
+           restricted to those where `V` is `+` and `W` is `-`.
+           A list of such strings may be used, in which case the union of the
+           corresponding sets of states is considered.
+         - `split` (`True`): should the graph be initially split into its initial
+           states, SCC hull, and deadlocks+basins
+        """
+        if isinstance(init, str) :
+            init = [init]
+        for i, s in enumerate(init) :
+            if s not in ("*", "+", "-") :
+                init[i] = ",".join(f"{s.state.name}{s2c[s.state.sign]}"
+                                   for s in model.spec.meta) + "," + s
+        cg = cls(compact=compact, init=init, model=model)
+        c_all = Component(cg.lts, cg.lts.states,
+                          gp=cg.lts.graph_props(cg.lts.states))
+        if split :
+            cg.components = tuple(c for c in c_all.topo_split(split_entries=False,
+                                                              split_exits=False)
+                                  if c is not None)
+        else :
+            cg.components = (c_all,)
+        cg._c.update((c.num, c) for c in cg.components)
+        return cg
+    def __getitem__ (self, num) :
+        """return a component or an edge from the `ComponentGraph`
+
+        Arguments:
+         - when `num:int`: return a `Component` instance whose number is `num`
+         - when `src,dst:num,num`: return a `dict` with the attributes of an edge
+           between components `src` and `dst`
+        Return: `Component` or `dict`
+        """
+        if isinstance(num, int) :
+            return self._c[num]
+        else :
+            try :
+                src, dst = num
+                eid = self.g.get_eid(self._g[src], self._g[dst])
+            except :
+                raise KeyError(num)
+            return self.g.es[eid].attributes()
+    def __iter__ (self) :
+        yield from self.components
+    def __eq__ (self, other) :
+        """equality test
+
+        Two component graphs are equal whenever they both contain
+        exactly the same components.
+        """
+        return set(self.components) == set(other.components)
+    def _patch (self, rem, add) :
+        # return a copy of the ComponentGraph with `rem` nodes removed
+        # and `add` nodes added
+        lts = self.lts.copy()
+        cg = self.__class__(compact=self.compact, lts=lts, model=self.model)
+        rnum = set(c.num for c in rem)
+        keep = tuple(c.copy(lts) for c in self.components if c.num not in rnum)
+        add = tuple(c.copy(lts) for c in add)
+        cg.components = keep + add
+        cg._c.update((c.num, c) for c in cg.components)
+        return cg
+    def _add_vertex (self, g, c) :
+        # add `c:Component` as a vertex in `g:igraph.Graph`
+        self._c[c.num] = c
+        self._g[c.num] = g.add_vertex(node=c.num).index
+    def _collect_edges (self, src, targets, edges) :
+        # collect the edges to be added from `src` to the nodes in `targets`
+        for trans, succ in src.succ(*targets) :
+            edges[src.num,succ.num].add(trans)
+    def _add_edges (self, g, edges) :
+        # add the collected `edges` to `g:igraph.Graph`
+        _g = self._g
+        for (src, dst), rules in edges.items() :
+            g.add_edge(_g[src], _g[dst], src=src, dst=dst,
+                       rules=hset(rules, key=_rulekey))
+    @cached_property
+    def g (self) :
+        """the actual component graph stored as an `igraph.Graph` instance
+        """
+        g = ig.Graph(directed=True)
+        edges = defaultdict(set)
+        for c in self.components :
+            self._add_vertex(g, c)
+            self._collect_edges(c, self.components, edges)
+        self._add_edges(g, edges)
+        return g
+    @cached_property
+    def n (self) :
+        """a `Tableproxy` wrapping the `nodes` dataframe
+        """
+        return NodesTableProxy(self, self.nodes)
+    @cached_property
+    def e (self) :
+        """a `Tableproxy` wrapping the `edges` dataframe
+        """
+        return TableProxy(self.edges)
+    @cached_property
+    def nodes (self) :
+        """a `pandas.DataFrame` holding the information about the nodes
+        """
+        nodes = self.g.get_vertex_dataframe()
+        def n_col (row) :
+            c = self._c[row.node]
+            return [len(c),
+                    hset(c.on),
+                    hset(c.off),
+                    hset(str(p) for p, v in c.graph_props.items() if v)]
+        nodes[["size", "on", "off", "topo"]] = nodes.apply(n_col, axis=1,
+                                                           result_type='expand')
+        nodes.set_index("node", inplace=True)
+        self._update(nodes)
+        return nodes
+    @cached_property
+    def edges (self) :
+        """a `pandas.DataFrame` holding the information about the edges
+        """
+        if len(self.g.es) == 0 :
+            # if there is no edge, add a dummy one to build a correct dataframe
+            num = self.components[0].num
+            self.g.add_edge(self._g[num], self._g[num],
+                            src=num, dst=num, rules=hset())
+        else :
+            num = None
+        edges = self.g.get_edge_dataframe().set_index(["src", "dst"])
+        del edges["source"], edges["target"]
+        if self.model.spec.labels :
+            spec_labels = self.model.spec.labels
+            def lbl (rules) :
+                labels = set()
+                for r in rules :
+                    labels.update(l.strip() for l in spec_labels.get(r).split(",")
+                                  if l.strip())
+                return hset(labels)
+            edges["labels"] = edges["rules"].apply(lbl)
+        if num is not None :
+            # remove the dummy edge
+            return edges.drop((num, num), axis="index")
+        else :
+            return edges
+    def __len__ (self) :
+        """number of components in the `ComponentGraph`
+        """
+        return len(self.components)
+    def _update (self, nodes=None) :
+        # updates the components' split_graph properties in a nodes dataframe
+        if nodes is None :
+            nodes = getattr(self, "_cached_nodes", None)
+        if nodes is None :
+            return
+        cols = [r.name for r in setrel]
+        data = pd.DataFrame.from_records([[hset(c, sep=";")
+                                           for c in self._c[n].props_row()]
+                                          for n in nodes.index],
+                                         columns=cols, index=nodes.index)
+        nodes[cols] = data
+    def update (self) :
+        """updates table `nodes` wrt components' properties
+
+        This method may be needed when components shared with other component
+        graphs are checked or split against new formulas.
+        """
+        self._update()
+    def _get_args (self, args, aliased={},
+                   min_props=0, max_props=-1, min_compo=0, max_compo=-1) :
+        # parse args as a sequence of properties followed by a sequence of components
+        properties = {v : k for k, v in aliased.items()}
+        components = []
+        for i, p in enumerate(args) :
+            if isinstance(p, str) :
+                properties[p] = ""
+            elif isinstance (p, int) :
+                components = args[i:]
+                for c in components :
+                    if not c in self._c :
+                        raise TypeError(f"unexpected argument {c!r}")
+                break
+            else :
+                raise TypeError(f"unexpected argument {p!r}")
+        if max_props < 0 :
+            _max_props = len(args) + len(aliased)
+        else :
+            _max_props = max_props
+        if not min_props <= len(properties) <= _max_props :
+            if min_props == max_props == 0 :
+                raise TypeError(f"no properties expected,"
+                                f" got {len(properties)}")
+            elif max_props < 0 :
+                raise TypeError(f"expected at least {min_props} properties,"
+                                f" got {len(properties)}")
+            else :
+                raise TypeError(f"expected {min_props} to {_max_props} properties,"
+                                f" got {len(properties)}")
+        if max_compo < 0 :
+            _max_compo = len(args)
+        else :
+            _max_compo = max_compo
+        if not min_compo <= len(components) <= _max_compo :
+            if min_compo == max_compo == 0 :
+                raise TypeError(f"no components expected,"
+                                f" got {len(components)}")
+            elif max_compo < 0 :
+                raise TypeError(f"expected at least {min_compo} components,"
+                                f" got {len(components)}")
+            else :
+                raise TypeError(f"expected {min_compo} to {_max_compo} components,"
+                                f" got {len(components)}")
+        if components :
+            components = tuple(self._c[c] for c in components)
+        else :
+            components = self.components
+        return properties, components
+    def forget (self, *args) :
+        """forget about properties
+
+        Remove properties from the nodes table, from the components, and from the LTS.
+
+        Arguments:
+         - `prop, ...` (`str`): at least one property to be removed
+        """
+        props, _ = self._get_args(args, min_props=1, max_compo=0)
+        alias = {a : p for p, a in self.tls.alias.items()}
+        for prop in props :
+            prop = alias.get(prop, prop)
+            for c in self.components :
+                c.split_props.pop(prop, None)
+            self.lts.alias.pop(prop, None)
+            self.lts.props.pop(prop, None)
+        self._update()
+    def forget_all (self) :
+        """forget about all properties
+
+        Remove all properties from the nodes table, from the components,
+        and from the LTS.
+        """
+        for c in self.components :
+            c.split_props.clear()
+        self.lts.props.clear()
+        self.lts.alias.clear()
+        self._update()
+    def tag (self, *args) :
+        """add a dummy properties to components
+
+        Tag `name` is a dummy property whose states are those of the component
+        to which it's added.
+
+        Parameters:
+         - `name, ...` (`str`): at least one tag name
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+        """
+        props, compo = self._get_args(args, min_props=1)
+        #TODO: log
+        for p in props :
+            for c in compo :
+                c.tag(p)
+        self._update()
+    def check (self, *args, **aliased) :
+        """check properties on components
+
+        Arguments:
+         - `prop, ...` (`str`): at least one property to be checked against
+           the states of components
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+
+        Returns: a list of tuples of `setrel` corresponding for each property `prop`
+        to the relations between each component and the states validation `prop`
+        in the states of whole component graph
+        """
+        props, compo = self._get_args(args, aliased, min_props=1)
+        ret = {c.num : dict() for c in compo}
+        #TODO: log
+        for prop, alias in props.items() :
+            checker = ltsprop.AnyProp(self.model, self.lts, prop)
+            for c in compo :
+                ret[c.num][prop] = setrel(c.check(prop, checker(c.states), alias)).name
+            if not self.lts.props[prop] :
+                log.warn(f"property {prop!r} is empty")
+        self._update()
+        return ret
+    def split (self, *args, **aliased) :
+        """split components wrt properties
+
+        Each considered component is split into the states that validate
+        each the property and those that do not. If a property is globally
+        (in)valid on one component, then no split occurs.
+
+        Arguments:
+         - `prop, ...` (`str`): at least one property to be checked against the
+           states of components
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+
+        Returns: a new `ComponentGraph` instance
+        """
+        props, compo = self._get_args(args, aliased, min_props=1)
+        rem, add, compo = set(), set(), set(compo)
+        for prop, alias in props.items() :
+            r, a = self._split(prop, compo, alias)
+            if not self.lts.props[prop] :
+                log.warn(f"property {prop!r} is empty")
+            rem.update(r)
+            add.update(a)
+            compo = (compo - set(r)) | set(a)
+        self._update()
+        add.difference_update(rem)
+        rem.intersection_update(self.components)
+        return self._patch(rem, add)
+    def _split (self, prop, components, alias="") :
+        rem, add = [], []
+        checker = ltsprop.AnyProp(self.model, self.lts, prop)
+        for c in components :
+            intr, diff = c.split(prop, checker(c.states), alias)
+            #TODO: log
+            if intr is not None and diff is not None :
+                rem.append(c)
+                add.append(intr)
+                add.append(diff)
+        return rem, add
+    def topo_split (self, *args,
+                    init=True, entries=True, exits=True, hull=True, dead=True) :
+        """split components into their topological parts
+
+        Each part will be extracted as a sub-component in the following order:
+         - `init`: initial states
+         - `entries`: states from which the component may be entered
+         - `exits`: states from which the component may be exited
+         - `hull`: states forming a SCC hull within the components
+         - `dead`: deadlocks and their basin
+         - `rest`: other states that do not fall into one of the previous cases
+
+        The order of extraction is importer since, for example, an
+        initial state will be in the `init` part and not the `entries`
+        part if it could belong to both. Which part is actually
+        extracted is controlled with the method's parameters.
+
+        Parameters:
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+         - `init` (`bool=True`): whether to extract initial states
+         - `entries` (`bool=True`): whether to extract entry states
+         - `exits` (`bool=True`): whether to extract exit states
+         - `hull` (`bool=True`): whether to extract SCC hull states
+         - `dead` (`bool=True`): whether to extract deadlocks
+
+        Returns: a new `ComponentGraph` instance
+        """
+        rem, add = [], []
+        _, compos = self._get_args(args, max_props=0)
+        # TODO: log
+        for c in compos :
+            parts = c.topo_split(split_init=init,
+                                 split_entries=entries,
+                                 split_exits=exits,
+                                 split_hull=hull,
+                                 split_dead=dead)
+            keep = [p for p in parts if p is not None]
+            if len(keep) > 1 :
+                rem.append(c)
+                add.extend(keep)
+        return self._patch(rem, add)
+    _relmatch = {(setrel.HASNO, True) : {setrel.HASNO},
+                 (setrel.HASNO, False) : {setrel.HASNO},
+                 (setrel.HAS, True) : {setrel.HAS},
+                 (setrel.HAS, False) : {setrel.HAS, setrel.CONTAINS,
+                                        setrel.ISIN, setrel.EQUALS},
+                 (setrel.CONTAINS, True) : {setrel.CONTAINS},
+                 (setrel.CONTAINS, False) : {setrel.CONTAINS, setrel.EQUALS},
+                 (setrel.ISIN, True) : {setrel.ISIN},
+                 (setrel.ISIN, False) : {setrel.ISIN, setrel.EQUALS},
+                 (setrel.EQUALS, True) : {setrel.EQUALS},
+                 (setrel.EQUALS, False) : {setrel.EQUALS}}
+    def classify (self, col, *components, src_col=None, dst_col=None, **classes) :
+        """split component graph and classify the resulting nodes wrt `classes`
+
+        `classes` provides pairs named properties as pairs `name=prop`.
+        The method first splits the component graph wrt these properties.
+        Then, a column `col` is added to the `nodes` table of the resulting component
+        graph such that it contains, for each resulting component, the set of properties
+        that hold on the component, given by their names.
+
+        Parameters:
+         - `col` (`str`): name of the column where nodes classification is stored
+         - `components, ...` (`int`): components to be classified (all if none is given)
+         - `src_col` (`str=None`): name of a column where edges source nodes
+           classification is stored
+         - `dst_col` (`str=None`): name of a column where edges destination nodes
+           classification is stored
+         - `name=prop, ...` (`str`): named properties fot classification
+        """
+        new = self.split(*classes.values(), *components)
+        c2n = {v : k for k, v in classes.items()}
+        def cname (row) :
+            props = set()
+            for c in ("EQUALS", "ISIN") :
+                if c in row.index :
+                    props.update(c2n[prop] for prop in row[c] if prop in c2n)
+            return hset(props)
+        new.n[col] = cname
+        if src_col :
+            def sname (row) :
+                return new.nodes[col][row.name[0]]
+            new.e[src_col] = sname
+        if dst_col :
+            def dname (row) :
+                return new.nodes[col][row.name[1]]
+            new.e[dst_col] = dname
+        return new
+    @cached_property
+    def _GCS (self) :
+        class MyGCS (_GCS) :
+            components = {c.num for c in self.components}
+        return MyGCS
+    def __call__ (self, prop, rel=setrel.HAS, strict=False) :
+        """compute the set of components that match `prop`
+
+        The returned set supports `~` to compute its complement wrt
+        the set of all components in the graph.
+
+        For each value of `setrel`, two shorthand  methods are available,
+        for instance:
+         - `g.has(p)` is like calling `g(p, rel=setrel.HAS, strict=False)`
+         - `g.HAS(p)` is like calling `g(p, rel=setrel.HAS, strict=True)`
+
+        Arguments:
+         - `prop` (`str`): the property to check on components
+         - `rel` (`setrel=HAS`): the relation the components must have with `prop`
+         - `strict` (`bool=False`): if `True`, `rel` must be exactly matched,
+           otherwise, `rel` is considered relaxed (eg, `HAS` can be realised by `ISIN`)
+        Return: the set of component numbers that match the property
+        """
+        update = False
+        for c in self.components :
+            if prop not in c.split_props :
+                update = True
+                self.check(prop, c.num)
+        if update :
+            self._update()
+        return self._GCS(c.num for c in self.components
+                         if c.split_props[prop] in self._relmatch[rel,strict])
+    def has (self, prop) :
+        return self(prop, setrel.HAS, False)
+    def HAS (self, prop) :
+        return self(prop, setrel.HAS, True)
+    def hasno (self, prop) :
+        return self(prop, setrel.HASNO, False)
+    def HASNO (self, prop) :
+        return self(prop, setrel.HASNO, True)
+    def contains (self, prop) :
+        return self(prop, setrel.CONTAINS, False)
+    def CONTAINS (self, prop) :
+        return self(prop, setrel.CONTAINS, True)
+    def isin (self, prop) :
+        return self(prop, setrel.ISIN, False)
+    def ISIN (self, prop) :
+        return self(prop, setrel.ISIN, True)
+    def equals (self, prop) :
+        return self(prop, setrel.EQUALS, False)
+    def EQUALS (self, prop) :
+        return self(prop, setrel.EQUALS, True)
+    def select (self, *args, all=True, rel=setrel.ISIN, **aliased) :
+        """select components that validate properties
+
+        Arguments:
+         - `prop, ...` (`str`): at least one property to be checked against
+           the states of components
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+         - `all` (`bool=True`): how the selected components from each property are
+           accumulated. If `True`, selected components must validate all the properties,
+           if `False`, they must validate at least one property
+         - `rel` (`setrel=ISIN`): how the property should be validated by the
+           components, a single relation may be provided or several in an iterable,
+           in which case any of these relations is accepted
+
+        Returns: a set of components numbers among `components` that validate
+        the property
+        """
+        props, compos = self._get_args(args, aliased, min_props=1)
+        if isinstance(rel, setrel) :
+            rel = {rel}
+        else :
+            rel = set(rel)
+        if all :
+            found = set(c.num for c in compos)
+        else :
+            found = set()
+        update = False
+        for p, a in props.items() :
+            for c in compos :
+                if p not in c.split_props :
+                    update = True
+                    self.check(p, c.num, a)
+            match = {c.num for c in compos if c.split_props[p] in rel}
+            if all :
+                found.intersection_update(match)
+            else :
+                found.update(match)
+        if update :
+            self._update()
+        return found
+    def explicit (self, *args, limit=256) :
+        """splits components into its individual states
+
+        Arguments:
+         - `number, ...`: a series of components number, if empty, all the
+           components in the graph are considered
+         - `limit` (`int=256`): maximum number of components in the split graph,
+           if it will have more that `limit` components, a confirmation is asked
+           to the user (`limit` may be set <= 0 to avoid this user-interaction)
+        Returns: a new `ComponentGraph` instance
+        """
+        _, compos = self._get_args(args, max_props=0)
+        if limit > 0 :
+            size = sum((len(c) for c in compos), 0) + len(self.components) - len(compos)
+            if size  > limit :
+                answer = input(f"This will create a graph with {size} nodes,"
+                               f" are you sure? [N/y] ")
+                if not answer.lower().startswith("y") :
+                    return
+        rem, add = [], []
+        state2compo = {}
+        if "component" in self.nodes.columns :
+            state2compo.update((row.name, row.component)
+                               for _, row in self.nodes.iterrows())
+        for c in compos :
+            new = tuple(c.explicit())
+            state2compo.update((n.num, c.num) for n in new)
+            if len(new) > 1 :
+                rem.append(c)
+                add.extend(new)
+        ret = self._patch(rem, add)
+        ret.n["component"] = lambda row: state2compo.get(row.name, row.name)
+        return ret
+    def merge (self, *args) :
+        """merge two or more components
+
+        Arguments:
+         - `number, ...` (`int`): at least two components to be merged
+        Returns: a new `ComponentGraph` instance
+        """
+        rem, add = [], []
+        _, compos = self._get_args(args, max_props=0, min_compo=2)
+        rem.extend(compos)
+        add.append(rem[0].merge(*rem[1:]))
+        return self._patch(rem, add)
+    def drop (self, *args) :
+        """drop one or more components from the component graph
+
+        Arguments:
+         - `number, ...` (`int`): at least one component to be removed
+        Returns: a new `ComponentGraph` instance, or `None` if all the components
+        are to be removed
+        """
+        _, compos = self._get_args(args, max_props=0, min_compo=1)
+        if len(compos) == len(self) :
+            log.warn("cannot drop all the components")
+            return
+        return self._patch(compos, [])
+    def form (self, *args, variables=None, normalise=None) :
+        """describe components by Boolean formulas
+
+        Arguments:
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+         - `variables=...`: a collection of variables names to restrict to
+         - `normalise=...`: how the formula should be normalised, which must be either:
+           - `"cnf"`: conjunctive normal form
+           - `"dnf"`: disjunctive normal form
+           - `None`: chose the smallest form
+        Return: a `dict` mapping component numbers to sympy Boolean formulas
+        """
+        _, compos = self._get_args(args, max_props=0)
+        return {c.num : c.form(variables, normalise) for c in compos}
+    def count (self, *args, transpose=False) :
+        """count in how many states each variable is on in components
+
+        Arguments:
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+         - `transpose` (`bool=False`): default is to have the components numbers
+           as the rows, and the variables as the columns, if `transpose=True`,
+           this is swapped
+        Return: a `pandas.DataFrame` instance
+        """
+        _, compos = self._get_args(args, max_props=0)
+        counts = [c.count() for c in compos]
+        df = pd.DataFrame.from_records([[c.get(v, 0) for v in self.lts.vars]
+                                        for c in counts],
+                                       index=[c.num for c in compos],
+                                       columns=list(sorted(self.lts.vars)))
+        if transpose :
+            return df.transpose()
+        else :
+            return df
+    def pca (self, *args, transpose=False,
+             n_components=2, n_iter=3, copy=True, check_input=True,
+             engine="auto", random_state=42,
+             rescale_with_mean=True, rescale_with_std=True) :
+        """principal component analysis of the `count` matrix
+
+        Arguments:
+         - `number, ...` (`int`): a series of components number, if empty, all the
+           components in the graph are considered
+         - `transpose`: passed to method `count()`
+
+        See https://github.com/MaxHalford/prince#principal-component-analysis-pca
+        for documentation about the other arguments.
+
+        Returns: a `pandas.DataFrame` as computed by Prince.
+        """
+        count = self.count(*args, transpose=transpose)
+        count = count[count.sum(axis="columns") > 0]
+        pca = prince.PCA(n_components=n_components,
+                         n_iter=n_iter,
+                         copy=copy,
+                         check_input=check_input,
+                         engine=engine,
+                         random_state=random_state,
+                         rescale_with_mean=rescale_with_mean,
+                         rescale_with_std=rescale_with_std)
+        pca.fit(count)
+        trans = pca.transform(count)
+        for idx in set(count.index) - set(trans.index) :
+            trans.loc[idx] = [0, 0]
+        return trans
+    def draw (self, **opt) :
+        """draw the component graph
+
+        Arguments:
+         - `opt`: various options to control the drawing
+
+        Figure options:
+         - fig_width (960): figure width (in pixels)
+         - fig_height (600): figure height (in pixels)
+         - fig_padding (0.1): internal figure margins
+         - fig_title (None): figure title
+         - fig_background ("#F7F7F7"): figure background color
+        Graph options:
+         - graph_layout ("fdp"): layout engine to compute nodes positions
+        Nodes options:
+         - nodes_label ("node"): column that defines nodes labels
+         - nodes_shape (auto): column that defines nodes shape
+         - nodes_size (35): nodes width
+         - nodes_color ("size"): column that defines nodes colors
+         - nodes_selected ("#EE0000"): color of the nodes selected for inspection
+         - nodes_palette ("GRW"): palette for the nodes colors
+         - nodes_ratio (1.2): height/width ratio of non-symmetrical nodes
+
+        Returns: a `Graph` instance that can be directly displayed in a
+        Jupyter Notebook
+        """
+        if len(self) < 2 :
+            log.print("cannot draw a graph with only one node", "error")
+            display(self.nodes)
+            return
+        try :
+            # don't add PCA layout when PCA fails
+            opt.setdefault("graph_engines", {})["PCA"] = self.pca()
+        except :
+            log.print("could not compute PCA, this layout is thus disabled", "warning")
+        return Graph(self.nodes, self.edges,
+                     defaults={
+                         "nodes_color" : "size",
+                         "nodes_colorscale" : "linear",
+                         "nodes_palette" : "GRW",
+                         "nodes_shape" : (["topo"], self._nodes_shape),
+                         "marks_shape" : (["topo"], self._marks_shape),
+                         "marks_palette" : ["#FFFFFF", "#000000"],
+                         "marks_opacity" : .5,
+                         "marks_stroke" : "#888888",
+                         "fig_background" : "#F7F7F7",
+                     }, **opt)
+    def _nodes_shape (self, row) :
+        # helper function for method draw: computes nodes shapes
+        if "is_scc" in row.topo :
+            return "circ"
+        elif "has_dead" in row.topo :
+            return "sbox"
+        else :
+            return "rbox"
+    def _marks_shape (self, row) :
+        # helper function for method draw: computes nodes decorations
+        if "has_init" in row.topo :
+            return "triangle-down"
+        elif "is_hull" in row.topo :
+            return "circle"
+    def search (self, *args, prune=True, **aliased) :
+        # split every component wrt every property
+        props, compo = self._get_args(args, aliased, min_props=2)
+        rem, add, compo = set(), set(), set(compo)
+        for prop, alias in props.items() :
+            r, a = self._split(prop, compo, alias)
+            rem.update(r)
+            add.update(a)
+            compo = (compo - set(r)) | set(a)
+        self._update()
+        add.difference_update(rem)
+        rem.intersection_update(self.components)
+        # build new component graph
+        new = self._patch(rem, add)
+        new.g # ensure that new.g is built, so that new._g is usable
+        steps = [[new._g[c.num] for c in new.components
+                  if c.split_props[prop] in (setrel.EQUALS, setrel.ISIN)]
+                 for prop in (one, two, *more)]
+        # get shortest path between steps
+        parts = new._search(steps)
+        path = [one]
+        for p, s in zip(parts, (two, *more)) :
+            path.extend([p, s])
+        # remove unwanted nodes
+        if prune :
+            keep = set()
+            for p in parts :
+                keep.update(p)
+            return new._patch([c for c in new.components
+                               if c.num not in keep], []), path
+        else :
+            return new, path
+        #TODO: add info in edge table
+        #TODO: upgrade Graph to allow drawing this info
+    def _search (self, steps) :
+        # search a shortest path going through each step
+        # returns a series of paths from one step to the next one
+        # if no path exists, the corresponding path in the returned series is empty
+        parts = []
+        found = [[[None, n]] for n in steps[0]]
+        for sources, targets in zip(steps, steps[1:]) :
+            extend = []
+            for path in self._shortest_paths(sources, targets) :
+                extend.extend(p + [path] for p in found if p[-1][-1] == path[0])
+            if extend :
+                found = extend
+            else :
+                if found :
+                    found.sort(key=lambda l: sum(len(p) for p in l))
+                    parts.extend(found[0])
+                else :
+                    parts.append([None])
+                found = [[[None, n]] for n in targets]
+        if extend :
+            extend.sort(key=lambda l: sum(len(p) for p in l))
+            parts.extend(extend[0])
+        del parts[0]
+        parts = [p if p[0] is not None else [] for p in parts]
+        return [self.g.vs[p]["node"] for p in parts]
+    def _shortest_paths (self, sources, targets) :
+        with warnings.catch_warnings() :
+            warnings.simplefilter("ignore")
+            for src in sources :
+                for path in self.g.get_shortest_paths(src, targets) :
+                    if len(path) > 1 :
+                        yield path
+    def dump (self) :
+        # dump ComponentGraph info to dict, as for LTS and Component
+        return {"DDD" : [],
+                "model" : self.model.path}
+    def save (self, path) :
+        """save component graph to `path`
+
+        Arguments:
+         - `path` (`str`): file name to be saved to
+        """
+        d2n = {}
+        hdr = []
+        for obj in (self, self.lts, *self.components) :
+            dump = obj.dump()
+            for i, d in enumerate(dump["DDD"]) :
+                dump["DDD"][i] = d2n.setdefault(d, len(d2n))
+            hdr.append(dump)
+        ddd.ddd_save(path, *d2n, dumps=hdr, compact=self.compact)
+    @classmethod
+    def load (cls, path) :
+        """reload a previously saved component graph from `path`
+
+        Arguments:
+         - `path` (`str`): file name to load from
+        Returns: loaded `ComponentGraph` instance
+        """
+        headers, ddds = ddd.ddd_load(path)
+        dump_cg, dump_lts, *dump_compos = headers["dumps"]
+        for dump in (dump_cg, dump_lts, *dump_compos) :
+            for i, n in enumerate(dump["DDD"]) :
+                dump["DDD"][i] = ddds[n]
+        lts = LTS.load(dump_lts)
+        compos = tuple(Component.load(dump, lts) for dump in dump_compos)
+        model = load_model(dump_cg["model"])
+        cg = cls(compact=headers["compact"], lts=lts, model=model)
+        cg.components = compos
+        cg._c.update((c.num, c) for c in compos)
+        return cg
+
+__extra__ = ["Model", "parse", "Palette", "ComponentGraph", "setrel"]

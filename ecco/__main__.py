@@ -1,6 +1,6 @@
-import argparse, importlib
+import argparse
 
-from . import Model
+from . import load
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-d", "--debug", action="store_true", default=False,
@@ -8,14 +8,6 @@ parser.add_argument("-d", "--debug", action="store_true", default=False,
 parser.add_argument("model", metavar="PATH", type=str, nargs="?", default=None,
                     help="model to load")
 args = parser.parse_args()
-
-def load (path) :
-    fmt = path.rsplit(".", 1)[-1].lower()
-    try :
-        module = importlib.import_module("." + fmt, "ecco")
-    except ModuleNotFoundError :
-        raise ValueError("unknown model format %r" % fmt)
-    return module, getattr(module, "Model", Model)(path, module.parse(path))
 
 if args.model :
     _module, model = load(args.model)

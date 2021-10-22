@@ -1,3 +1,6 @@
+## Version 0.3
+
+ * completely reworked design
  * improved example notebooks
  * fixed Docker image
 

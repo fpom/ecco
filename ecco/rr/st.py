@@ -21,15 +21,30 @@ def flatten (value) :
 ## data classes
 ##
 
+sign2sign = {True : True,
+             "+" : True,
+             False : False,
+             "-" : False,
+             None : None,
+             "*" : None}
+
+sign2char = {True : "+",
+             False : "-",
+             None : "*"}
+
+sign2neg = {True : False,
+            False : True,
+            None : None}
+
 class State (Record) :
     _fields = ["name", "sign"]
     def __init__ (self, name, sign) :
         super().__init__(name, sign)
-        self.sign = self.sign in ("+", True)
+        self.sign = sign2sign[self.sign]
     def __str__ (self) :
-        return "".join([self.name, "+" if self.sign else "-"])
+        return "".join([self.name, sign2char[self.sign]])
     def neg (self) :
-        return self.__class__(self.name, "-" if self.sign else "+")
+        return self.__class__(self.name, sign2neg[self.sign])
     def __hash__ (self) :
         return hash(str(self))
     def __eq__ (self, other) :
@@ -48,7 +63,7 @@ class State (Record) :
     def __ge__ (self, other) :
         return not self.__lt__(other)
     def __invert__ (self) :
-        return self.__class__(self.name, not self.sign)
+        return self.__class__(self.name, sign2neg[self.sign])
     def __pos__ (self) :
         return self.__class__(self.name, True)
     def __neg__ (self) :
@@ -132,15 +147,17 @@ class Constraint (Rule) :
 class Sort (Record) :
     _fields = ["state", "kind", "description"]
     def __lt__ (self, other) :
-        return (self.state.name, self.state.sign) < (other.state.name, other.state.sign)
+        if self.state.sign is None and other.state.sign is None :
+            return self.state.name < other.state.name
+        elif self.state.sign is None :
+            return self.state.name < other.state.name or True
+        elif other.state.sign is None :
+            return self.state.name < other.state.name or False
+        else :
+            return (self.state.name, self.state.sign) < (other.state.name,
+                                                         other.state.sign)
     def __eq__ (self, other) :
         return (self.state.name, self.state.sign) == (other.state.name, other.state.sign)
-
-def literal (txt) :
-    try :
-        return ast.literal_eval(txt)
-    except :
-        return txt
 
 class Spec (Record) :
     _fields = ["meta", "constraints", "rules"]
@@ -149,7 +166,7 @@ class Spec (Record) :
         self.meta = tuple(meta)
         self.constraints = tuple(self._renum(constraints))
         self.rules = tuple(self._renum(rules))
-        self.labels = {r.name() : literal(r.label) for r in self if r.label}
+        self.labels = {r.name() : r.label for r in self if r.label}
         self.validate()
     def _renum (self, rules) :
         n = 1 + max((r.num or 0 for r in rules), default=0)
@@ -256,6 +273,11 @@ class Parser (object) :
         variable:word state:/[+-]/
         """
         return State(st.variable, st.state)
+    def varinit (self, st) :
+        """
+        variable:word state:/[*+-]/
+        """
+        return State(st.variable, sign2sign[st.state])
     def vdecl (self, st) :
         """
         name:word ":" {nl}+
@@ -269,7 +291,7 @@ class Parser (object) :
         ","%{ left:varstate }+ ">>" ","%{ right:varstate }+ {nl}+
         """
         if st.label :
-            label = st.label.strip()
+            label = st.label.strip() or None
         else :
             label = None
         if isinstance(st.left, list) :

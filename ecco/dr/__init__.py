@@ -1,12 +1,12 @@
 from . import drparse, rr
-from .. import Model as _Model
+from .. import BaseModel
 
 def parse (path) :
     with open(path) as infile :
         src = drparse.indedent(infile.read())
     return drparse.DeerParser.p_parse(src)
 
-class Model (_Model) :
+class Model (BaseModel) :
     def rr (self, path=None) :
         """convert model to RR
         Arguments:
