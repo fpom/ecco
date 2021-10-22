@@ -1120,7 +1120,8 @@ class ComponentGraph (object) :
         for prop, alias in props.items() :
             r, a = self._split(prop, compo, alias)
             if not self.lts.props[prop] :
-                log.warn(f"property {prop!r} is empty")
+                desc = self.lts.alias.get(prop, prop)
+                log.warn(f"property {desc!r} is empty")
             rem.update(r)
             add.update(a)
             compo = (compo - set(r)) | set(a)
