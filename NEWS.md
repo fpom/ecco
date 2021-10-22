@@ -1,3 +1,4 @@
+ * fixed installation procedure
  * updated documentation 
 
 ## Version 0.3
