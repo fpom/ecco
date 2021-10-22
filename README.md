@@ -75,7 +75,7 @@ First, you should install all the dependencies:
 
 Then, run `python setup.py install` as usual, or `pip install git+https://github.com/fpom/ecco.git` to install directly from the [GitHub repository](https://github.com/fpom/ecco).
 
-Looking at `docker/Dockerfile` in the distribution will give you the commands to run on a Linux box with [Anaconda](https://www.anaconda.com) installed.
+Looking at `docker/Dockerfile` in the distribution will give you the commands to run on a Linux box.
 
 You may want to configure Jupyter notebooks so that files with extensions `.rr` are opened and edited as Python files, which is more convenient than editing them as plain text (editing as YAML could be another good choice).
 To do so, add the following to `/etc/jupyter/nbconfig/edit.json`:
