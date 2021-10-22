@@ -1,3 +1,5 @@
+ * updated documentation 
+
 ## Version 0.3
 
  * completely reworked design
