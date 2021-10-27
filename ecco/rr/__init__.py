@@ -1097,7 +1097,8 @@ class ComponentGraph (object) :
             for c in compo :
                 ret[c.num][prop] = setrel(c.check(prop, checker(c.states), alias)).name
             if not self.lts.props[prop] :
-                log.warn(f"property {prop!r} is empty")
+                desc = self.lts.alias.get(prop, prop)
+                log.warn(f"property {desc!r} is empty")
         self._update()
         return ret
     def split (self, *args, **aliased) :
