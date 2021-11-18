@@ -1,3 +1,5 @@
+ * added script `bin/ecco.py` to start `ecco` easily
+
 ## Version 0.4
 
  * various minor improvement
