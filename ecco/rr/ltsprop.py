@@ -104,6 +104,14 @@ class StateProp (Prop) :
         if states is None :
             states = self.states
         return self.lts.pred(self.lts.succ(states) - states) & states
+    def _do_oneway (self, trans, states=None) :
+        if states is None :
+            states = self.lts.states
+        pre = self.lts.tpred[trans](states)
+        post = self.lts.succ_s(self.lts.tsucc[trans](states))
+        if post & pre :
+            raise ValueError(f"{trans} is not one-way")
+        return post
     def _get_states (self, states) :
         self.states = states
         return eval(self.prop, {}, self)

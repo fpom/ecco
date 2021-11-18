@@ -1,10 +1,11 @@
-import itertools, re, tempfile, operator, functools, subprocess, warnings, pathlib
-import ptnet, prince, its, ddd
+import itertools, re, tempfile, operator, functools, subprocess, warnings, pathlib, sys
+import ptnet, prince, its, ddd, sympy
 import pandas as pd
 import numpy as np
 import bqplot as bq
 import ipywidgets as ipw
 import igraph as ig
+import tl
 
 from collections import defaultdict
 from IPython.display import display
@@ -136,6 +137,23 @@ class TableProxy (object) :
     def _repr_pretty_ (self, pp, cycle) :
         return pp.text(repr(self[:]))
 
+LATEX_RR_STY = r"""
+\ProvidesPackage{rr}
+
+\usepackage{fancyvrb}
+\usepackage{color}
+
+\newcommand\RRon[1]{{\color{green!40!black}#1+}}
+\newcommand\RRoff[1]{{\color{red!40!black}#1-}}
+\newcommand\RRany[1]{{\color{blue!40!black}#1*}}
+\newcommand\RRsec[1]{{\fontseries{b}\selectfont #1:}}
+\newcommand\RRtag[1]{{\color{purple!40!black}[#1]}}
+\newcommand\RRthen{{\color{yellow!40!black}{>}{>}}}
+\newcommand\RRcmt[1]{{\color{white!70!black}\# #1}}
+
+\newcommand\rr[1]{\texttt{#1}}
+"""
+
 class Model (BaseModel) :
     ##
     ## RR
@@ -191,6 +209,58 @@ class Model (BaseModel) :
                             h.write("   # %s" % rule.name())
                         h.write("\n")
         return h
+    def latex (self, out, sty=None, names=False, cols=False) :
+        if sty is not None :
+            sty.write(LATEX_RR_STY)
+        out.write(r"\begin{Verbatim}[commandchars=\\\{\}]" "\n")
+        sections = {}
+        for d in self.spec.meta :
+            sections.setdefault(d.kind, []).append(d)
+        for sect, decl in sections.items() :
+            out.write(fr"\RRsec{{{sect}}}" "\n")
+            for d in decl :
+                out.write("    ")
+                if d.state.sign is None :
+                    out.write(fr"\RRany{{{d.state.name}}}")
+                elif d.state.sign :
+                    out.write(fr"\RRon{{{d.state.name}}}")
+                else :
+                    out.write(fr"\RRoff{{{d.state.name}}}")
+                out.write(f": {d.description}\n")
+        if names :
+            width = max(len(r.text())
+                        for rules in (self.spec.constraints, self.spec.rules)
+                        for r in rules)
+        if cols :
+            out.write(r"\columnbreak" "\n")
+        for sect in ("constraints", "rules") :
+            rules = getattr(self.spec, sect)
+            if rules:
+                out.write(fr"\RRsec{{{sect}}}" "\n")
+                for rule in rules :
+                    out.write("  ")
+                    if (rule.label or "").strip() :
+                        out.write(fr"\RRtag{{{rule.label.strip()}}} ")
+                    for i, s in enumerate(rule.left) :
+                        if i :
+                            out.write(", ")
+                        if s.sign :
+                            out.write(fr"\RRon{{{s.name}}}")
+                        else :
+                            out.write(fr"\RRoff{{{s.name}}}")
+                    out.write(" \RRthen ")
+                    for i, s in enumerate(rule.right) :
+                        if i :
+                            out.write(", ")
+                        if s.sign :
+                            out.write(fr"\RRon{{{s.name}}}")
+                        else :
+                            out.write(fr"\RRoff{{{s.name}}}")
+                    if names :
+                        out.write(" " * (2 + width - len(rule.text())))
+                        out.write(fr"\RRcmt{{{rule.name()}}}")
+                    out.write("\n")
+        out.write(r"\end{Verbatim}" "\n")
     def charact (self, constraints: bool=True, variables=None) -> pd.DataFrame :
         """compute variables static characterisation
         Options:
@@ -340,7 +410,7 @@ class Model (BaseModel) :
         return str(self[("c" if compact else "")
                         + ("p" if permissive else "")
                         + "gal"])
-    def gal (self, compact=False, permissive=False, showlog=True) :
+    def gal (self, compact=False, permissive=False, showlog=True, init={}) :
         path = self.gal_path(compact, permissive)
         with log(head="<b>saving</b>",
                  tail=path,
@@ -351,8 +421,9 @@ class Model (BaseModel) :
             out.write(f"gal {name} {{\n    //*** variables ***//\n")
             # variables
             for sort in self.spec.meta :
+                sign = bool(init.get(sort.state.name, sort.state.sign))
                 out.write(f"    // {sort.state}: {sort.description} ({sort.kind})\n"
-                          f"    int {sort.state.name} = {bool(sort.state.sign):d};\n")
+                          f"    int {sort.state.name} = {sign:d};\n")
                 if permissive :
                     out.write(f"    int {sort.state.name}_flip = 0;\n")
                     if self.spec.constraints :
@@ -541,7 +612,7 @@ class Model (BaseModel) :
                       + "\n".join(f"<br/><code>{cons[n]}</code>" for n in loop))
             log.finish()
         return [cons[n] for n in loop]
-    def CTL (self, formula, compact=True, options=[], debug=False) :
+    def CTL (self, formula, compact=True, options=[], debug=False, init={}) :
         """Model-check a CTL formula
         Arguments:
          - formula: a CTL formula fiven as a string
@@ -551,10 +622,10 @@ class Model (BaseModel) :
          - debug (False): show "its-ctl" output
         """
         with tempfile.NamedTemporaryFile(mode="w+", suffix=f".ctl") as tmp :
-            tmp.write(formula + ";")
+            tmp.write(tl.parse(formula).its_ctl())
             tmp.flush()
             argv = ["its-ctl",
-                    "-i", self.gal(compact=compact),
+                    "-i", self.gal(compact=compact, init=init),
                     "-t", "GAL",
                     "-ctl", tmp.name,
                     "--quiet"] + options
@@ -565,9 +636,9 @@ class Model (BaseModel) :
                 out = err.output
                 debug = True
         if debug :
-            print(out)
+            sys.stderr.write(out)
         return "Formula is TRUE" in out
-    def LTL (self, formula, compact=True, options=[], algo="SSLAP-FST", debug=False) :
+    def LTL (self, formula, compact=True, options=[], algo="SSLAP-FST", debug=False, init={}) :
         """Model-check a LTL formula
         Arguments:
          - formula: a LTL formula fiven as a string
@@ -578,10 +649,10 @@ class Model (BaseModel) :
          - debug (False): show "its-ltl" output
         """
         argv = ["its-ltl",
-                "-i", self.gal(compact=compact),
+                "-i", self.gal(compact=compact, init=init),
                 "-t", "GAL",
                 "-c", "-e",
-                "-ltl", formula,
+                "-ltl", tl.parse(formula).its_ltl(),
                 f"-{algo}",
                 "--place-syntax"] + options
         try :
@@ -591,7 +662,7 @@ class Model (BaseModel) :
             out = err.output
             debug = True
         if debug :
-            print(out)
+            sys.stderr.write(out)
         return "Formula 0 is FALSE" in out
     ##
     ## ecosystemic (hyper)graph
@@ -1381,7 +1452,7 @@ class ComponentGraph (object) :
             log.warn("cannot drop all the components")
             return
         return self._patch(compos, [])
-    def form (self, *args, variables=None, normalise=None) :
+    def form (self, *args, variables=None, normalise=None, separate=False) :
         """describe components by Boolean formulas
 
         Arguments:
@@ -1392,10 +1463,17 @@ class ComponentGraph (object) :
            - `"cnf"`: conjunctive normal form
            - `"dnf"`: disjunctive normal form
            - `None`: chose the smallest form
-        Return: a `dict` mapping component numbers to sympy Boolean formulas
+         - `separate=...`: if `False` (default) returns a single formula, otherwise,
+           returns one formula for each considered component
+        Return: a sympy Boolean formula or a `dict` mapping component numbers
+        to such formulas
         """
         _, compos = self._get_args(args, max_props=0)
-        return {c.num : c.form(variables, normalise) for c in compos}
+        forms = {c.num : c.form(variables, normalise) for c in compos}
+        if separate :
+            return forms
+        else :
+            return sympy.simplify_logic(sympy.Or(*forms.values()), form=normalise)
     def count (self, *args, transpose=False) :
         """count in how many states each variable is on in components
 
@@ -1435,16 +1513,18 @@ class ComponentGraph (object) :
         """
         count = self.count(*args, transpose=transpose)
         count = count[count.sum(axis="columns") > 0]
-        pca = prince.PCA(n_components=n_components,
-                         n_iter=n_iter,
-                         copy=copy,
-                         check_input=check_input,
-                         engine=engine,
-                         random_state=random_state,
-                         rescale_with_mean=rescale_with_mean,
-                         rescale_with_std=rescale_with_std)
-        pca.fit(count)
-        trans = pca.transform(count)
+        with warnings.catch_warnings() :
+            warnings.simplefilter("ignore")
+            pca = prince.PCA(n_components=n_components,
+                             n_iter=n_iter,
+                             copy=copy,
+                             check_input=check_input,
+                             engine=engine,
+                             random_state=random_state,
+                             rescale_with_mean=rescale_with_mean,
+                             rescale_with_std=rescale_with_std)
+            pca.fit(count)
+            trans = pca.transform(count)
         for idx in set(count.index) - set(trans.index) :
             trans.loc[idx] = [0, 0]
         return trans

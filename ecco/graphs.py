@@ -173,6 +173,22 @@ def _str (value) :
     else :
         return str(value) or " "
 
+LATEX_GRAPH_STY = r"""
+\ProvidesPackage{ecco}
+
+\usepackage{tikz}
+\usetikzlibrary{shapes,automata}
+
+\tikzstyle{compo}=[draw,minimum size=6mm,label=center:{#1},
+  regular polygon,regular polygon sides=6]
+\tikzset{init/.style 2 args={fill,circle,inner sep=0pt,minimum size=5pt,at=(#1.#2)},
+         init/.default={N1}{120}}
+\tikzstyle{dead}=[rectangle]
+\tikzstyle{hull}=[ellipse,minimum width=8mm]
+\tikzstyle{scc}=[circle]
+\tikzstyle{trans label}[above]=[sloped,scale=.8,#1]
+"""
+
 class Graph (Record) :
     _fields = ["nodes", "nodes_columns",
                "edges", "edges_columns",
@@ -251,6 +267,31 @@ class Graph (Record) :
         edges = self.edges[[self.srccol, self.dstcol]]
         g.add_edges_from(edges.itertuples(index=False))
         return g
+    def latex (self, out, sty=None, width=10, height=10, grid=.5) :
+        if sty is not None :
+            sty.write(LATEX_GRAPH_STY)
+        out.write(r"\begin{tikzpicture}" "\n")
+        for _, node in self.nodes.iterrows() :
+            if {"is_dead", "has_dead"} & set(node.topo) :
+                shape = ",dead"
+            elif "is_scc" in node.topo :
+                shape = ",scc"
+            elif "is_hull" in node.topo :
+                shape = ",hull"
+            else :
+                shape = ""
+            posx = round((width * node._x) / (node._x_max * grid)) * grid
+            posy = round((height * node._y) / (node._y_max * grid)) * grid
+            name = node.node
+            out.write(fr"  \node[compo={name}{shape}] (N{name})"
+                      fr" at ({posx},{posy}) {{}};" "\n")
+            if {"is_init", "has_init"} & set(node.topo) :
+                out.write(fr"  \node[init={{N{name}}}{{120}}] {{}};" "\n")
+        for _, edge in self.edges.iterrows() :
+            out.write(fr"\draw[->] (N{edge.src}) "
+                      fr"to[edge node={{node[trans label] {{\rr{{{edge.rules}}}}}}}] "
+                      fr" (N{edge.dst});" "\n")
+        out.write(r"\end{tikzpicture}" "\n")
     ##
     ## gui
     ##

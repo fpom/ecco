@@ -1,3 +1,7 @@
+## Version 0.4
+
+ * various minor improvement
+ * description of components with Boolean formulas
  * fixed installation procedure
  * updated documentation 
 
