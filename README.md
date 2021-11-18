@@ -38,12 +38,20 @@ One may find such an early version of `ecco` here: [DOI:10.5281/zenodo.3241370](
 ## Quickstart
 
 `ecco` is available as a Docker image so you don't need to install it.
-Just run `docker run -p 8000:8000 franckpommereau/ecco jupyterhub` then point your browser to [localhost:8000](http://localhost:8000) and login as user `ecco` with password `ecco`.
+But of course you need to have Docker installed.
+
+The simplest way to run `ecco` from this Docker image is to download [this script](https://github.com/fpom/ecco/raw/main/bin/ecco.py) and run it.
+It will take care if everything.
+Use `ecco.py --help` for further information about the available options.
+
+If you wish to do it manually, run `docker run -p 8000:8000 franckpommereau/ecco jupyterhub` then point your browser to [localhost:8000](http://localhost:8000) and login as user `ecco` with password `ecco`.
 The notebooks and example models are available in directory `doc`.
 
-This Docker image runs `ecco` on the top of a multi-user `JupyterHub` installation, you may reconfigure it according to you needs (in particular, to add users and data persistence).
+The Docker command above runs `ecco` on the top of a multi-user `JupyterHub` installation, you may reconfigure it according to you needs (in particular, to add users and data persistence) for a production usage.
 
-To run a specific version, user `docker run -p 8000:8000 franckpommereau/ecco:VERSION jupyterhub` where version is one of the tags listed on [ecco Github page](https://github.com/fpom/ecco/tags).
+You may also want to run `docker run -p 8000:8000 -u ecco -w /home/ecco franckpommereau/ecco jupyter-notebook --no-browser --port=8000 --ip=0.0.0.0` to start only `Jupyter Notebook` without `JupyterHub`.
+
+To run a specific version of `ecco`, use `docker run ... franckpommereau/ecco:VERSION ...` where version is one of the tags listed on [ecco Github page](https://github.com/fpom/ecco/tags).
 
 ## Automated installation
 
