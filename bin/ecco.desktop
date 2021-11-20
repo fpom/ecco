@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Terminal=false
+Name=ecco
+Exec=/path/to/ecco.py
+Icon=//path/to/ecco.png
+StartupWMClass=ecco-gui

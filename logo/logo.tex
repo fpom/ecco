@@ -1,0 +1,20 @@
+\documentclass{standalone}
+
+\usepackage{tikz}
+
+\begin{document}
+\sffamily
+\bfseries
+\Huge
+
+\begin{tikzpicture}[scale=.6]
+  \draw (-.5,-.5) -- (-.5,1.5) -- (1.5,1.5) -- (1.5,-.5) -- cycle;
+  \fill (-.5,-.5) rectangle (.5,.5);
+  \fill (.5,.5) rectangle (1.5,1.5);
+  \node at (0,1) {e};
+  \node at (1,1) {\color{white}c};
+  \node at (0,0) {\color{white}c};
+  \node at (1,0) {o};
+\end{tikzpicture}
+
+\end{document}
