@@ -1,3 +1,4 @@
+ * new logo
  * added Desktop integration
  * added script `bin/ecco.py` to start `ecco` easily
 
