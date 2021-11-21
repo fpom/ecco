@@ -31,9 +31,6 @@ All together, this yields a state space that `ecco` can compute, analyse, and re
 They have not been publicly released but their features will be progressively ported into `ecco`.
 One may find such an early version of `ecco` here: [DOI:10.5281/zenodo.3241370](https://doi.org/10.5281/zenodo.3241370)
 
-![ecco logo](https://github.com/fpom/ecco/blob/main/logo/ecco.png?raw=true)
-![eden logo](https://github.com/fpom/ecco/blob/main/logo/eden.png?raw=true)
-
 ## Documentation
 
 `ecco` is documented through Jupyter notebooks that can be found into directory `doc`.
