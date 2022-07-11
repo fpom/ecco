@@ -77,9 +77,12 @@ class Rule (Record) :
     def normalise (self) :
         missing = [s for s in self.left if s not in self.right and ~s not in self.right]
         if missing :
-            rule = self.__class__(self.left, self.right + missing, label=self.label)
+            return self.__class__(self.left, self.right + missing,
+                                  num=self.num, parent=self, label=self.label)
         else :
-            rule = self
+            return self
+    def elementarise (self) :
+        rule = self.normalise()
         toadd = [[]]
         diff = [s for s in rule.right if s not in rule.left and ~s not in rule.left]
         if not diff :
@@ -88,9 +91,9 @@ class Rule (Record) :
             for state in diff :
                 toadd = ([t + [state] for t in toadd]
                          + [t + [state.neg()] for t in toadd])
-            for t in toadd :
-                yield rule.__class__(rule.left + list(sorted(t)), rule.right, self,
-                                     label=self.label)
+            for n, t in enumerate(toadd, start=1) :
+                yield rule.__class__(rule.left + list(sorted(t)), rule.right,
+                                     parent=self, label=self.label, num=n)
     def text (self) :
         return "%s >> %s" % (", ".join(s.name + ("+" if s.sign else "-")
                                        for s in self.left),
@@ -98,6 +101,11 @@ class Rule (Record) :
                                        for s in self.right))
     def name (self) :
         return self.__class__.__name__[0] + str(self.num or "")
+    def full_name (self) :
+        if not self.parent :
+            return self.name()
+        else :
+            return ":".join([self.parent.name(), str(self.num or "")])
     def __str__ (self) :
         if self.label :
             return "[%s] %s  # %s" % (self.label, self.text(), self.name())

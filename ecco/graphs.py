@@ -4,9 +4,11 @@ import pandas as pd
 import numpy as np
 import bqplot as bq
 import ipywidgets as ipw
+
 from IPython.display import display, clear_output
 from math import pi
 from colour import Color
+
 from . import Record, cached_property, scm, bqcm
 from .ui import getopt, now
 
@@ -272,25 +274,32 @@ class Graph (Record) :
             sty.write(LATEX_GRAPH_STY)
         out.write(r"\begin{tikzpicture}" "\n")
         for _, node in self.nodes.iterrows() :
-            if {"is_dead", "has_dead"} & set(node.topo) :
-                shape = ",dead"
-            elif "is_scc" in node.topo :
-                shape = ",scc"
-            elif "is_hull" in node.topo :
-                shape = ",hull"
-            else :
-                shape = ""
+            if "topo" in node.index :
+                if {"is_dead", "has_dead"} & set(node.topo) :
+                    shape = ",dead"
+                elif "is_scc" in node.topo :
+                    shape = ",scc"
+                elif "is_hull" in node.topo :
+                    shape = ",hull"
+                else :
+                    shape = ""
+            elif "shape" in node.index :
+                shape = f",{node['shape']}"
             posx = round((width * node._x) / (node._x_max * grid)) * grid
             posy = round((height * node._y) / (node._y_max * grid)) * grid
             name = node.node
             out.write(fr"  \node[compo={name}{shape}] (N{name})"
                       fr" at ({posx},{posy}) {{}};" "\n")
-            if {"is_init", "has_init"} & set(node.topo) :
-                out.write(fr"  \node[init={{N{name}}}{{120}}] {{}};" "\n")
+            if "topo" in node.index :
+                if {"is_init", "has_init"} & set(node.topo) :
+                    out.write(fr"  \node[init={{N{name}}}{{120}}] {{}};" "\n")
         for _, edge in self.edges.iterrows() :
-            out.write(fr"\draw[->] (N{edge.src}) "
-                      fr"to[edge node={{node[trans label] {{\rr{{{edge.rules}}}}}}}] "
-                      fr" (N{edge.dst});" "\n")
+            if "rules" in edge.index :
+                out.write(fr"\draw[->] (N{edge.src}) "
+                          fr"to[edge node={{node[trans label] {{\rr{{{edge.rules}}}}}}}]"
+                          fr" (N{edge.dst});" "\n")
+            else :
+                out.write(fr"\draw[->] (N{edge.src}) to (N{edge.dst});" "\n")
         out.write(r"\end{tikzpicture}" "\n")
     ##
     ## gui

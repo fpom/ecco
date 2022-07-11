@@ -1,4 +1,5 @@
 # distutils: language = c++
+# distutils: include_dirs = ../pyddd ../libDDD ../libITS
 
 import inspect
 import sympy

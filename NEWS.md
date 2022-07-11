@@ -1,3 +1,6 @@
+## Version 0.5
+
+ * new interactive graph
  * new logo
  * added Desktop integration
  * added script `bin/ecco.py` to start `ecco` easily

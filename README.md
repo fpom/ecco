@@ -7,10 +7,6 @@ It implements methods described and used in several papers:
    ecosystem._
    C. Gaucherel, F. Pommereau.
    [DOI:10.1111/2041-210X.13242](https://doi.org/10.1111/2041-210X.13242)
- * _Petri nets semantics of Reaction Rules (RR) a language for ecosystems modelling._
-   F. Pommereau,C. Thomas, C. Gaucherel.
-   To appear in Proc. of PETRINETS'22.
-   [HAL:03617050](https://hal.archives-ouvertes.fr/hal-03617050)
  * _Maintaining biodiversity promotes the multifunctionality of social-ecological
    systems: holistic modelling of a mountain system._
    Z. Mao, J. Centanni, F. Pommereau, A. Stokes, C. Gaucherel.
@@ -23,7 +19,7 @@ It implements methods described and used in several papers:
    C. Gaucherel, F. Pommereau, C. Hély.
    [DOI:10.1155/2020/7163920](https://doi.org/10.1155/2020/7163920)
    
-At the heart of `ecco` is the _reaction rules_ modelling language described in [DOI:10.1111/2041-210X.13242](https://doi.org/10.1111/2041-210X.13242) and further extended and detailed in [HAL:03617050](https://hal.archives-ouvertes.fr/hal-03617050) that allows to describe an ecosystem as:
+At the heart of `ecco` is the _reaction rules_ modelling language described in [DOI:10.1111/2041-210X.13242](https://doi.org/10.1111/2041-210X.13242) that allows to describe an ecosystem as:
 
  * a set of Boolean entities that define the state of the ecosystem
  * a set of rules that define the transitions (aka, states changes)
@@ -56,30 +52,6 @@ The Docker command above runs `ecco` on the top of a multi-user `JupyterHub` ins
 You may also want to run `docker run -p 8000:8000 -u ecco -w /home/ecco franckpommereau/ecco jupyter-notebook --no-browser --port=8000 --ip=0.0.0.0` to start only `Jupyter Notebook` without `JupyterHub`.
 
 To run a specific version of `ecco`, use `docker run ... franckpommereau/ecco:VERSION ...` where version is one of the tags listed on [ecco Github page](https://github.com/fpom/ecco/tags).
-
-## `ecco` CLI and GUI
-
-You may copy `ecco.py` somewhere in your `PATH`, renaming it to `ecco`.
-Then, running just `ecco` will start the Docker container and point your browser onto the freshly started Jupyter Notebook.
-Stop the container with `Ctrl-C` in the terminal from which you've stared `ecco`.
-
-Since `ecco` runs inside a Docker container, you will not find your files, and everything done inside the container will be lost when it shuts down.
-To work around this, use option `--mount` that allows to access a local directory from within the container.
-For instance `ecco --mount workdir` creates a directory `workdir` inside the container that gives access to your local directory `workdir` so that everything that is saved to it is also saved outside of the container.
-You may use `--mount` has many times as necessary.
-
-Option `--tag` allows to run a specific version of `ecco` and defaults to the lastest.
-Option `--port` allows to change the TCP port on which `jupyter-notebook` is available, and it defaults to `8000`.
-
-An experimental option `--gui` provides desktop integration.
-It's experimental since it has been tested only under Linux/Gnome so far, but in principle it should work everywhere else.
-To use it, you'll have to install package `PySide2` that provides the portable graphical library.
-That done, you may run `ecco --gui --no-browse` on you session startup to run a background instance of the container and install an icon in the system tray.
-The other options are available too of course, in particular `--mount`.
-Right-clicking on the tray icon yields a menu that allows to point your browser onto the running `jupyter-notebook` (which `--no-browse` avoided), or shutting down the container and the GUI.
-
-Lastly, after its own options, `ecco` accepts any command with options to be run inside the container instead of `juputer-notebook`.
-Other, more specific, options are available, run `ecco --help` to list them.
 
 ## Automated installation
 
@@ -127,6 +99,30 @@ To do so, add the following to `/etc/jupyter/nbconfig/edit.json`:
   }
 }
 ```
+
+## `ecco` CLI and GUI
+
+You may copy `ecco.py` somewhere in your `PATH`, renaming it to `ecco`.
+Then, running just `ecco` will start the Docker container and point your browser onto the freshly started Jupyter Notebook.
+Stop the container with `Ctrl-C`.
+
+Since `ecco` runs inside a Docker container, you will not find your files, and everything done inside the container will be lost when it shuts down.
+To work around this, use option `--mount` that allows to access a local directory from within the container.
+For instance `ecco --mount workdir` creates a directory `workdir` inside the container that gives access to your local directory `workdir` so that everything that is saved to it is also saved outside of the container.
+You may use `--mount` has many times as necessary.
+
+Option `--tag` allows to run a specific version of `ecco` and defaults to the lastest.
+Option `--port` allows to change the TCP port on which `jupyter-notebook` is available, and it defaults to `8000`.
+
+An experimental option `--gui` provides desktop integration.
+It's experimental since it has been tested only under Linux/Gnome so far, but in principle it should work everywhere else.
+To use it, you'll have to install package `PySide2` that provides the portable graphical library.
+That done, you may run `ecco --gui --no-browse` on you session startup to run a background instance of the container and install an icon in the system tray.
+The other options are available too of course, in particular `--mount`.
+Right-clicking on the tray icon yields a menu that allows to point your browser onto the running `jupyter-notebook` (which `--no-browse` avoided), or shutting down the container and the GUI.
+
+Lastly, after its own options, `ecco` accepts any command with options to be run inside the container instead of `juputer-notebook`.
+Other, more specific, options are available, run `ecco --help` to list them.
 
 ## Contact and bug reports
 

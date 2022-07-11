@@ -123,18 +123,12 @@ class CTLProp (Prop) :
             phi = tl.parse(prop).ctl()
         super().__init__(model, lts, prop)
         self.phi = phi
-        self.fair = phi.fair
     def _get_states (self, states) :
         cache = self.cache
         if None in cache :
             checker = cache[None]
         else :
-            if self.fair :
-                checker = mc.FairCTL_model_checker(self.lts.states,
-                                                   self.lts.pred,
-                                                   self.fair)
-            else :
-                checker = mc.CTL_model_checker(self.lts.states,
+            checker = mc.CTL_model_checker(self.lts.states,
                                                self.lts.pred)
             cache[None] = checker
         return checker.check(self.phi)
@@ -146,38 +140,20 @@ class ARCTLProp (Prop) :
             phi = tl.parse(prop).arctl()
         super().__init__(model, lts, prop)
         self.phi = phi
-        self.fair = phi.fair
     def _get_states (self, states) :
         cache = self.cache
         if None in cache :
             checker = cache[None]
         else :
-            actions = defaultdict(list)
-            _labels = self.model.spec.labels
-            for rule in self.model.spec.rules :
+            actions = []
+            for rule in G.model.spec.rules:
                 rname = rule.name()
-                label = _labels.get(rname, None) or "_None"
-                actions[rname].append(self.lts.tpred[rname])
-                for lbl in (l.strip() for l in label.split(",")
-                            if l.strip()) :
-                    actions[lbl].append(self.lts.tpred[rname])
-            lbl2shom = {}
-            for label, shoms in actions.items() :
-                if len(shoms) == 1 :
-                    lbl2shom[label] = shoms[0]
-                else :
-                    lbl2shom[label] = functools.reduce(operator.or_, shoms)
-            if self.fair :
-                checker = mc.FairARCTL_model_checker(self.lts.states,
-                                                     lbl2shom,
-                                                     self.lts.pred,
-                                                     self.fair,
+                labels = G.model.spec.labels[rname].split(",")
+                labels.append(rname)
+                actions.append((G.lts.tpred[rname], labels))
+            checker = mc.ARCTL_model_checker(self.lts.states,
+                                                     actions,
                                                      true_label="_None")
-            else :
-                checker = mc.ARCTL_model_checker(self.lts.states,
-                                                 lbl2shom,
-                                                 self.lts.pred,
-                                                 tau_label="_None")
             cache[None] = checker
         return checker.check(self.phi)
 

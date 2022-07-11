@@ -6,7 +6,7 @@ from distutils.extension import Extension
 
 import ecco
 
-VERSION = '0.4'
+VERSION = '0.5'
 long_description = pathlib.Path("README.md").read_text(encoding="utf-8")
 description = inspect.cleandoc(ecco.__doc__).splitlines()[0]
 

@@ -1,4 +1,4 @@
-import itertools, re, tempfile, operator, functools, subprocess, warnings, pathlib, sys
+import itertools, re, tempfile, functools, subprocess, warnings, sys, operator
 import ptnet, prince, its, ddd, sympy
 import pandas as pd
 import numpy as np
@@ -11,11 +11,14 @@ from collections import defaultdict
 from IPython.display import display
 
 from .. import BaseModel, cached_property, CompileError, load as load_model
-from ..graphs import Graph, Palette
+from ..graphs import Palette
+from ..cygraphs import Graph
+from ..unf import Unfolding
 from ..ui import log, getopt, HTML
 from .lts import LTS, Component, setrel
 from . import ltsprop
 from .st import sign2char as s2c, Parser, FailedParse, State
+from .. import pn
 
 class hset (object) :
     "similar to frozenset with sorted values"
@@ -23,6 +26,15 @@ class hset (object) :
     def __init__ (self, iterable=(), key=None, reverse=False, sep=",") :
         self._values = tuple(sorted(iterable, key=key, reverse=reverse))
         self._sep = sep
+    def __hash__ (self) :
+        return functools.reduce(operator.xor,
+                                (hash(v) for v in self._values),
+                                hash("hset"))
+    def __eq__ (self, other) :
+        try :
+            return set(self._values) == set(other._values)
+        except :
+            return False
     def __iter__ (self) :
         yield from iter(self._values)
     def __bool__ (self) :
@@ -386,7 +398,7 @@ class Model (BaseModel) :
         """build a `ComponentGraph` from the model
 
         Arguments:
-         - `compact` (`True`): whether transient states should be removed and
+         - `compact` (`False`): whether transient states should be removed and
            transitions rules adjusted accordingly
          - `init` (`""`): initial states of the LTS. If empty: take them from
            the model. Otherwise, it must be a comma-separated sequence of states
@@ -612,12 +624,12 @@ class Model (BaseModel) :
                       + "\n".join(f"<br/><code>{cons[n]}</code>" for n in loop))
             log.finish()
         return [cons[n] for n in loop]
-    def CTL (self, formula, compact=True, options=[], debug=False, init={}) :
+    def CTL (self, formula, compact=False, options=[], debug=False, init={}) :
         """Model-check a CTL formula
         Arguments:
          - formula: a CTL formula fiven as a string
         Options:
-         - compact (True): check the compact model instead of the full
+         - compact (False): check the compact model instead of the full
          - options ([]): command line options to be passed to "its-ctl"
          - debug (False): show "its-ctl" output
         """
@@ -638,12 +650,12 @@ class Model (BaseModel) :
         if debug :
             sys.stderr.write(out)
         return "Formula is TRUE" in out
-    def LTL (self, formula, compact=True, options=[], algo="SSLAP-FST", debug=False, init={}) :
+    def LTL (self, formula, compact=False, options=[], algo="SSLAP-FST", debug=False, init={}) :
         """Model-check a LTL formula
         Arguments:
          - formula: a LTL formula fiven as a string
         Options:
-         - compact (True): check the compact model instead of the full
+         - compact (False): check the compact model instead of the full
          - options ([]): command line options to be passed to "its-ltl"
          - algo ("SSLAP-FST"): algorithm to be used
          - debug (False): show "its-ltl" output
@@ -671,21 +683,7 @@ class Model (BaseModel) :
         """draw the ecosystemic graph
         Options:
          - constraint (True): take constraints into account
-        Figure options:
-         - fig_width (960): figure width (in pixels)
-         - fig_height (600): figure height (in pixels)
-         - fig_padding (0.1): internal figure margins
-         - fig_title (None): figure title
-        Graph options:
-         - graph_layout ("circo"): layout engine to compute nodes positions
-        Nodes options:
-         - nodes_label ("node"): column that defines nodes labels
-         - nodes_shape (auto): column that defines nodes shape
-         - nodes_size (35): nodes width
-         - nodes_color ("init"): column that defines nodes colors
-         - nodes_selected ("#EE0000"): color of the nodes selected for inspection
-         - nodes_palette ("RGW"): palette for the nodes colors
-         - nodes_ratio (1.2): height/width ratio of non-symmetrical nodes
+         - plus any option accepted by `ecco.cygraphs.Graph`
         """
         nodes = []
         for sort in sorted(self.spec.meta, key=lambda s : s.state.name) :
@@ -703,30 +701,21 @@ class Model (BaseModel) :
                 for dst in rule.right :
                     edges.append({"src" : src.name, "dst" : dst.name,
                                   "rule" : rule.name(), "rr" : rule.text()})
+        options = dict(layout="circle",
+                       nodes_fill_color="init",
+                       nodes_fill_palette="red-green/white",
+                       nodes_shape="ellipse",
+                       edges_label="",
+                       edges_curve="straight")
+        options.update(opt)
         return Graph(pd.DataFrame.from_records(nodes, index="node"),
                      pd.DataFrame.from_records(edges, index=["src", "dst"]),
-                     defaults={
-                         "graph_layout" : "circo",
-                         "nodes_color" : "init",
-                         "nodes_colorscale" : "discrete",
-                         "nodes_palette" : "RGW",
-                         "nodes_shape" : "circ",
-                         "marks_shape" : None
-                     }, **opt)
+                     **options)
     def ecohyper (self, constraints: bool=True, **opt) :
         """draw the ecosystemic hypergraph
         Options:
          - constraint (True): take constraints into account
-        Figure options:
-         - fig_width (960): figure width (in pixels)
-         - fig_height (600): figure height (in pixels)
-         - fig_padding (0.1): internal figure margins
-         - fig_title (None): figure title
-        Graph options:
-         - graph_layout ("fdp"): layout engine to compute nodes positions
-        Nodes options:
-         - nodes_size (35): nodes width
-         - nodes_selected ("#EE0000"): color of the nodes selected for inspection
+         - plus any option accepted by `ecco.cygraphs.Graph`
         """
         nodes = []
         edges = []
@@ -736,90 +725,268 @@ class Model (BaseModel) :
             rules = list(self.spec.rules)
         for state, desc in sorted((s.state, s.description) for s in self.spec.meta) :
             nodes.append({"node" : state.name,
+                          "kind" : "variable",
+                          "init" : state.sign,
                           "info" : desc,
-                          "shape" : "circ",
+                          "shape" : "ellipse",
                           "color" : 0 if state.sign else 1})
         for rule in rules :
             name = rule.name()
             nodes.append({"node" : name,
+                          "kind" : "constraint" if name[0] == "C" else "rule",
+                          "init" : "",
                           "info" : rule.text(),
-                          "shape" : "sbox",
+                          "shape" : "rectangle",
                           "color" : 2 if name[0] == "C" else 3})
             for var in set(s.name for s in itertools.chain(rule.left, rule.right)) :
                 v0 = State(var, False)
                 v1 = State(var, True)
                 if v1 in rule.left :
                     if v1 in rule.right :
-                        start, end = "**"
+                        g, s = "**"
                     elif v0 in rule.right :
-                        start, end = "o*"
+                        g, s = "*o"
                     else :
-                        start, end = "-*"
+                        g, s = "*-"
                 elif v0 in rule.left :
                     if v1 in rule.right :
-                        start, end = "*o"
+                        g, s = "o*"
                     elif v0 in rule.right :
-                        start, end = "oo"
+                        g, s = "oo"
                     else :
-                        start, end = "-o"
+                        g, s = "o-"
                 elif v1 in rule.right :
-                    start, end = "*-"
+                    g, s = "-*"
                 elif v0 in rule.right :
-                    start, end = "o-"
-                edges.append({"src" : var, "dst" : name, "get" : start, "set" : end})
+                    g, s = "-o"
+                edges.append({"src" : name, "dst" : var, "get" : g, "set" : s})
+        options = dict(nodes_shape="shape",
+                       nodes_fill_color="color",
+                       nodes_fill_palette=("hypergraph", "lin", False),
+                       edges_label="",
+                       edges_source_tip="get",
+                       edges_target_tip="set",
+                       inspect_nodes=["kind", "init", "info"],
+                       ui=[{"Graph" :
+                            [["layout", "reset_view"]]},
+                           {"Nodes" :
+                            [{"Fill" :
+                              [["nodes_fill_color", "nodes_fill_palette"],
+                               ["nodes_fill_opacity"]]},
+                             {"Draw" :
+                              [["nodes_draw_color", "nodes_draw_palette"],
+                               ["nodes_draw_style", "nodes_draw_width"]]}]},
+                           {"Edges tips" :
+                            [["edges_tip_scale"]]},
+                           "graph",
+                           {"Inspector" :
+                            [["select_all", "select_none", "invert_selection"],
+                             ["inspect_nodes"]]}])
+        options.update(opt)
         return Graph(pd.DataFrame.from_records(nodes, index="node"),
                      pd.DataFrame.from_records(edges, index=["src", "dst"]),
-                     defaults={
-                         "graph_layout" : "fdp",
-                         "graph_directed" : False,
-                         "nodes_shape" : "shape",
-                         "nodes_color" : "color",
-                         "nodes_colorscale" : "discrete",
-                         "nodes_palette" : ["#AAFFAA", "#FFAAAA", "#FFFF88", "#FFFFFF"],
-                         "edges_tips" : ["get", "set"],
-                         "gui_main" : [["layout", "size"],
-                                       "figure",
-                                       "toolbar",
-                                       "inspect"],
-                     }, **opt)
+                     **options)
     ##
     ## Petri nets
     ##
-    def petri (self) :
-        n = ptnet.net.Net()
-        places = {}
-        for state in (s.state for s in self.spec.meta) :
-            places[state] = n.place_add(str(state), 1)
-            places[~state] = n.place_add(str(~state))
-        for rule in self.spec.rules :
-            for i, r in enumerate(rule.normalise()) :
-                if set(r.left) == set(r.right) :
-                    continue
-                t = n.trans_add("%s.%s" % (rule.name(), i))
-                for v in r.vars() :
-                    on = State(v, True)
-                    off = State(v, False)
-                    if on in r.left and on in r.right :
-                        t.cont_add(places[on])
-                    elif on in r.left and off in r.right :
-                        t.pre_add(places[on])
-                        t.post_add(places[off])
-                    elif off in r.left and off in r.right :
-                        t.cont_add(places[off])
-                    elif off in r.left and on in r.right :
-                        t.pre_add(places[off])
-                        t.post_add(places[on])
-        return n
-    def unfold (self) :
-        n = self.petri()
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as pep,\
-             tempfile.NamedTemporaryFile("rb") as cuf :
-            n.write(pep)
-            pep.flush()
-            subprocess.run(["cunf", "-s", cuf.name, pep.name])
-            u = ptnet.unfolding.Unfolding()
-            u.read(cuf)
-        return u
+    def _petri_actions (self, transform=0) :
+        for prio, actions in enumerate([self.spec.rules, self.spec.constraints]) :
+            for act in actions :
+                if transform == 0 :
+                    yield bool(prio), act
+                elif transform == 1 :
+                    yield bool(prio), act.normalise()
+                elif transform == 2 :
+                    for a in act.elementarise() :
+                        yield bool(prio), a
+                else :
+                    raise ValueError(f"unexpected value for transform: {transform}")
+    def petri (self, kind="xpn") :
+        kind = kind.upper()
+        if kind == "EPN" :
+            net = pn.EPN()
+            for state in (s.state for s in self.spec.meta) :
+                net.add_place(state.name, tokens=state.sign)
+            for prio, action in self._petri_actions(1) :
+                trans = action.name()
+                net.add_trans(trans, priority=prio)
+                for var in action.vars() :
+                    on = State(var, True)
+                    off = State(var, False)
+                    if on in action.left and on in action.right :
+                        net.add_read(var, trans)
+                    elif off in action.left and off in action.right :
+                        net.add_inhib(var, trans)
+                    elif on in action.left and off in action.right :
+                        net.add_cons(var, trans)
+                    elif off in action.left and on in action.right :
+                        net.add_inhib(var, trans)
+                        net.add_prod(trans, var)
+                    elif on in action.right :
+                        assert on not in action.left
+                        assert off not in action.left
+                        net.add_reset(var, trans)
+                        net.add_prod(trans, var)
+                    elif off in action.right :
+                        assert on not in action.left
+                        assert off not in action.left
+                        net.add_reset(var, trans)
+                    else :
+                        assert on not in action.left
+                        assert off not in action.left
+                        assert on not in action.right
+                        assert off not in action.right
+        elif kind == "XPN" :
+            net = pn.XPN()
+            for state in (s.state for s in self.spec.meta) :
+                net.add_place(f"{state.name}+", tokens=state.sign)
+                net.add_place(f"{state.name}-", tokens=not state.sign)
+            for prio, action in self._petri_actions(1) :
+                trans = action.name()
+                net.add_trans(trans, priority=prio)
+                for var in action.vars() :
+                    on = State(var, True)
+                    off = State(var, False)
+                    if on in action.left and on in action.right :
+                        net.add_read(f"{var}+", trans)
+                    elif off in action.left and off in action.right :
+                        net.add_read(f"{var}-", trans)
+                    elif on in action.left and off in action.right :
+                        net.add_cons(f"{var}+", trans)
+                        net.add_prod(trans, f"{var}-")
+                    elif off in action.left and on in action.right :
+                        net.add_cons(f"{var}-", trans)
+                        net.add_prod(trans, f"{var}+")
+                    elif on in action.right :
+                        assert on not in action.left
+                        assert off not in action.left
+                        net.add_reset(f"{var}+", trans)
+                        net.add_reset(f"{var}-", trans)
+                        net.add_prod(trans, f"{var}+")
+                    elif off in action.right :
+                        assert on not in action.left
+                        assert off not in action.left
+                        net.add_reset(f"{var}+", trans)
+                        net.add_reset(f"{var}-", trans)
+                        net.add_prod(trans, f"{var}-")
+                    else :
+                        assert on not in action.left
+                        assert off not in action.left
+                        assert on not in action.right
+                        assert off not in action.right
+        elif kind == "SPN" :
+            net = pn.SPN()
+            for state in (s.state for s in self.spec.meta) :
+                net.add_place(f"{state.name}+", tokens=state.sign)
+                net.add_place(f"{state.name}-", tokens=not state.sign)
+            for prio, action in self._petri_actions(2) :
+                trans = action.full_name()
+                net.add_trans(trans, priority=prio)
+                for var in action.vars() :
+                    on = State(var, True)
+                    off = State(var, False)
+                    if on in action.left and on in action.right :
+                        net.add_cons(f"{var}+", trans)
+                        net.add_prod(trans, f"{var}+")
+                    elif off in action.left and off in action.right :
+                        net.add_cons(f"{var}-", trans)
+                        net.add_prod(trans, f"{var}-")
+                    elif on in action.left and off in action.right :
+                        net.add_cons(f"{var}+", trans)
+                        net.add_prod(trans, f"{var}-")
+                    elif off in action.left and on in action.right :
+                        net.add_cons(f"{var}-", trans)
+                        net.add_prod(trans, f"{var}+")
+                    else :
+                        assert on not in action.left
+                        assert off not in action.left
+                        assert on not in action.right
+                        assert off not in action.right
+        else :
+            raise ValueError(f"unsupported Petri net class: {kind!r}")
+        return net
+    def pep (self, stream, epn=True) :
+        states = [s.state for s in self.spec.meta]
+        rules = list(self.spec.rules)
+        if self.spec.constraints :
+            rules.extend(self.spec.constraints)
+            log.warn("constraints have been turned into rules")
+        if epn :
+            self._pep_epn(stream, states, (r.normalise() for r in rules))
+        else :
+            self._pep_ppn(stream, states, (n for r in rules for n in r.elementarise()))
+    def _pep_epn (self, stream, states, rules) :
+        stream.write("PEP\n"
+                     "PetriBox\n"
+                     "FORMAT_N2\n")
+        # places
+        stream.write("PL\n")
+        pnum = {}
+        for state in states :
+            on, off = State(state.name, True),  State(state.name, False)
+            pnum[on] = 1 + len(pnum)
+            pnum[off] = 1 + len(pnum)
+            if state.sign :
+                stream.write(f'"{on}"M1\n')
+                stream.write(f'"{off}"\n')
+            else :
+                stream.write(f'"{on}"\n')
+                stream.write(f'"{off}"M1\n')
+        # transitions (and arcs)
+        stream.write("TR\n")
+        arcs = defaultdict(list)
+        for tnum, rule in enumerate(rules, start=1) :
+            stream.write(f'"{rule.name()}"\n')
+            left = set(s.name for s in rule.left)
+            right = set(s.name for s in rule.right)
+            for var in rule.vars() :
+                on, off = State(var, True),  State(var, False)
+                if on in rule.left and off in rule.right :
+                    # A+ >> A-
+                    arcs["PT"].append(f"{pnum[on]}>{tnum}")
+                    arcs["TP"].append(f"{tnum}<{pnum[off]}")
+                elif on in rule.left :
+                    # A+ >> A+ | (no A)
+                    assert (on in rule.right) or (var not in right)
+                    arcs["RD"].append(f"{pnum[on]}>{tnum}")
+                elif off in rule.left and on in rule.right :
+                    # A- >> A+
+                    arcs["PT"].append(f"{pnum[off]}>{tnum}")
+                    arcs["TP"].append(f"{tnum}<{pnum[on]}")
+                elif off in rule.left :
+                    # A- >> A- | (no A)
+                    assert (off in rule.right) or (var not in right)
+                    arcs["RD"].append(f"{pnum[off]}>{tnum}")
+                elif on in rule.right :
+                    # (no A) >> A+
+                    assert var not in left
+                    arcs["RS"].append(f"{pnum[on]}>{tnum}")
+                    arcs["RS"].append(f"{pnum[off]}>{tnum}")
+                    arcs["TP"].append(f"{tnum}<{pnum[on]}")
+                else :
+                    # (no A) >> A-
+                    assert (var not in left) and (off in rule.right)
+                    arcs["RS"].append(f"{pnum[on]}>{tnum}")
+                    arcs["RS"].append(f"{pnum[off]}>{tnum}")
+                    arcs["TP"].append(f"{tnum}<{pnum[off]}")
+        # write arcs
+        for kind in ["RD", "TP", "PT", "RS"] :
+            #NOTE: this order is important to avoid breaking ecofolder parsing
+            stream.write(f"{kind}\n")
+            stream.write("\n".join(arcs[kind]))
+            stream.write("\n")
+    def unfold (self, epn=True) :
+        pep_path = self["ll_net"]
+        pre_path = (pep_path.parent / (pep_path.stem + "_pr")).with_suffix(".ll_net")
+        mci_path = self["mci"]
+        with open(pep_path, "w") as stream :
+            self.pep(stream, epn)
+        subprocess.check_output(["pr_encoding", pep_path],
+                                stderr=subprocess.STDOUT)
+        subprocess.check_output(["ecofolder", pre_path, "-m", mci_path],
+                                stderr=subprocess.STDOUT)
+        with open(mci_path, "rb") as stream :
+            return Unfolding.from_mci(stream)
 
 class _GCS (set) :
     "a subclass of set that is tied to a component graph so it has __invert__"
@@ -854,7 +1021,7 @@ class NodesTableProxy (TableProxy) :
             raise AttributeError(f"table {self._n!r} has no column {name!r}")
 
 class ComponentGraph (object) :
-    def __init__ (self, model, compact=True, init="", lts=None, **k) :
+    def __init__ (self, model, compact=False, init="", lts=None, **k) :
         """create a new instance
 
         This method is not intended to be used directly, but it will be called by
@@ -874,12 +1041,12 @@ class ComponentGraph (object) :
         self._c = {} # Component.num => Component
         self._g = {} # Component.num => Vertex
     @classmethod
-    def from_model (cls, model, compact=True, init="", split=True) :
+    def from_model (cls, model, compact=False, init="", split=True) :
         """create a `ComponentGraph` from a `Model` instance
 
         Arguments:
          - `model`: a `Model` instance
-         - `compact` (`True`): whether transient states should be removed and
+         - `compact` (`False`): whether transient states should be removed and
            transitions rules adjusted accordingly
          - `init` (`str:""`): initial states of the LTS. If empty: take them from
            the model. Otherwise, it must be a comma-separated sequence of states
@@ -1254,6 +1421,29 @@ class ComponentGraph (object) :
                 rem.append(c)
                 add.extend(keep)
         return self._patch(rem, add)
+    def split_basins (self, *args) :
+        """split some components into the basins to some other components
+
+        The basin to a component `c` is the set of states that may
+        lead to `c`, ie, it is the set of predecessors of `c` in the
+        LTS. Calling, eg, `split_basins(1, 2, [3, 4])` will split
+        components `1` and `2` wrt the basins of `3` and `4`.
+
+        Parameters:
+         - `mumber, ...` (`int`): a series of at least one component
+           number to be split
+         - `[number, ...]` (`list[int]`): a list of at least one
+           component whose basins will be considered for splits
+        """
+        _, split = self._get_args(args[:-1], min_compo=1, max_props=0)
+        _, dest = self._get_args(args[-1], min_compo=1, max_props=0)
+        old = set(split)
+        for d in dest :
+            basin = self.lts.pred_s(d.states)
+            split = [s for c in split for s in c.split(f"basin({d.num})", basin)
+                     if s is not None]
+        new = set(split)
+        return self._patch(list(old - new), list(new - old))
     _relmatch = {(setrel.HASNO, True) : {setrel.HASNO},
                  (setrel.HASNO, False) : {setrel.HASNO},
                  (setrel.HAS, True) : {setrel.HAS},
@@ -1531,25 +1721,7 @@ class ComponentGraph (object) :
     def draw (self, **opt) :
         """draw the component graph
 
-        Arguments:
-         - `opt`: various options to control the drawing
-
-        Figure options:
-         - fig_width (960): figure width (in pixels)
-         - fig_height (600): figure height (in pixels)
-         - fig_padding (0.1): internal figure margins
-         - fig_title (None): figure title
-         - fig_background ("#F7F7F7"): figure background color
-        Graph options:
-         - graph_layout ("fdp"): layout engine to compute nodes positions
-        Nodes options:
-         - nodes_label ("node"): column that defines nodes labels
-         - nodes_shape (auto): column that defines nodes shape
-         - nodes_size (35): nodes width
-         - nodes_color ("size"): column that defines nodes colors
-         - nodes_selected ("#EE0000"): color of the nodes selected for inspection
-         - nodes_palette ("GRW"): palette for the nodes colors
-         - nodes_ratio (1.2): height/width ratio of non-symmetrical nodes
+        Arguments: any option accepted by `ecco.cygraphs.Graph`
 
         Returns: a `Graph` instance that can be directly displayed in a
         Jupyter Notebook
@@ -1560,35 +1732,19 @@ class ComponentGraph (object) :
             return
         try :
             # don't add PCA layout when PCA fails
-            opt.setdefault("graph_engines", {})["PCA"] = self.pca()
+            pca = self.pca()
+            pca *= 80 / pca.abs().max().max()
+            pos = {str(i) : tuple(r) for i, r in pca.iterrows()}
+            layout_extra = {"PCA" : pos}
         except :
+            layout_extra = {}
             log.print("could not compute PCA, this layout is thus disabled", "warning")
-        return Graph(self.nodes, self.edges,
-                     defaults={
-                         "nodes_color" : "size",
-                         "nodes_colorscale" : "linear",
-                         "nodes_palette" : "GRW",
-                         "nodes_shape" : (["topo"], self._nodes_shape),
-                         "marks_shape" : (["topo"], self._marks_shape),
-                         "marks_palette" : ["#FFFFFF", "#000000"],
-                         "marks_opacity" : .5,
-                         "marks_stroke" : "#888888",
-                         "fig_background" : "#F7F7F7",
-                     }, **opt)
-    def _nodes_shape (self, row) :
-        # helper function for method draw: computes nodes shapes
-        if "is_scc" in row.topo :
-            return "circ"
-        elif "has_dead" in row.topo :
-            return "sbox"
-        else :
-            return "rbox"
-    def _marks_shape (self, row) :
-        # helper function for method draw: computes nodes decorations
-        if "has_init" in row.topo :
-            return "triangle-down"
-        elif "is_hull" in row.topo :
-            return "circle"
+        options = dict(nodes_fill_color="size",
+                       nodes_fill_palette=("red-green/white", "abs"),
+                       layout_extra=layout_extra,
+                       edges_label="rules")
+        options.update(opt)
+        return Graph(self.nodes, self.edges, **options)
     def search (self, *args, prune=True, **aliased) :
         # split every component wrt every property
         props, compo = self._get_args(args, aliased, min_props=2)
