@@ -8,7 +8,7 @@ RUN useradd --skel /etc/skel --create-home --password ec2saXpWqj10U --user-group
 RUN apt-get -y upgrade
 RUN apt-get -y autoclean
 RUN npm install -g configurable-http-proxy
-RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyterhub networkx pandas numpy bqplot colour bitarray sympy cython tatsu psutil prince pydot python-igraph
+RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyterhub networkx pandas numpy bqplot colour bitarray sympy cython tatsu psutil prince pydot python-igraph ipycytoscape
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pytl.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/cunf-ptnet-py3.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pyddd.git

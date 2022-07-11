@@ -1,3 +1,5 @@
+ * updated documentation
+
 ## Version 0.5
 
  * new interactive graph
