@@ -1,3 +1,4 @@
+ * bugs fixed
  * updated documentation
 
 ## Version 0.5

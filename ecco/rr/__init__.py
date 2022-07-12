@@ -781,7 +781,9 @@ class Model (BaseModel) :
                            "graph",
                            {"Inspector" :
                             [["select_all", "select_none", "invert_selection"],
-                             ["inspect_nodes"]]}])
+                             ["inspect_nodes"]]},
+                           {"Export" :
+                            [["export"]]}])
         options.update(opt)
         return Graph(pd.DataFrame.from_records(nodes, index="node"),
                      pd.DataFrame.from_records(edges, index=["src", "dst"]),

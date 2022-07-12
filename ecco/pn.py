@@ -208,27 +208,6 @@ class NotNet (object) :
         for high in self.g.vs.select(priority=True) :
             for low in low_trans :
                 stream.write(f"pr {{{low['name']}}} < {{{high['name']}}}\n")
-    _ndrio_alias = {"tina" : "net",
-                    "ina" : "pnt"}
-    def _to_ndrio (self, fmt, stream) :
-        out = self._ndrio_alias.get(fmt.lower(), fmt.lower())
-        ndrio = subprocess.Popen(["ndrio", "-NET", f"-{out}", "-", "-"],
-                                 stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE,
-                                 encoding="utf-8")
-        self.to_tina(ndrio.stdin)
-        ndrio.stdin.close()
-        if ndrio.wait() != 0 :
-            err = ndrio.stderr.read()
-            raise ValueError(err)
-        stream.write(ndrio.stdout.read())
-    def to_pnml (self, stream) :
-        self._to_ndrio("pnml", stream)
-    def to_romeo (self, stream) :
-        self._to_ndrio("romeo", stream)
-    def to_lola (self, stream) :
-        self._to_ndrio("lola", stream)
     def to_pep (self, stream) :
         # headers
         stream.write("PEP\n"

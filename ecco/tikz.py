@@ -224,9 +224,9 @@ def tikz (nodes, edges) :
                 except :
                     angle = 0.0
                 out.write(f"rotate={angle},")
-                out.write(f"] {{\\fontsize{{{row['font-size']}pt}}"
-                          f"{{{row['font-size']}pt}}"
-                          f"\\selectfont {esc(row['label'])}}}")
+            out.write(f"] {{\\fontsize{{{row['font-size']}pt}}"
+                      f"{{{row['font-size']}pt}}"
+                      f"\\selectfont {esc(row['label'])}}}")
         out.write(f" (n{tgt});\n")
     out.write("\\end{tikzpicture}\n")
     return out.getvalue()

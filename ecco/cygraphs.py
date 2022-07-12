@@ -1449,6 +1449,7 @@ class Graph (object) :
                                         stdin=subprocess.DEVNULL,
                                         stderr=subprocess.STDOUT,
                                         encoding="utf-8", errors="replace",
+                                        timeout=300,
                                         cwd=tmp)
             except subprocess.CalledProcessError as err :
                 err.tex = (pathlib.Path(tmp) / "graph.tex").read_text()
@@ -1462,6 +1463,7 @@ class Graph (object) :
                                         stdin=subprocess.DEVNULL,
                                         stderr=subprocess.STDOUT,
                                         encoding="utf-8", errors="replace",
+                                        timeout=300,
                                         cwd=tmp)
             with (pathlib.Path(tmp) / output).open("rb") as img :
                 return img.read()

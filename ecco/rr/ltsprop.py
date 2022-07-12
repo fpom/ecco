@@ -145,15 +145,18 @@ class ARCTLProp (Prop) :
         if None in cache :
             checker = cache[None]
         else :
-            actions = []
-            for rule in G.model.spec.rules:
+            actions = dict()
+            for rule in self.model.spec.rules:
                 rname = rule.name()
-                labels = G.model.spec.labels[rname].split(",")
+                if self.model.spec.labels.get(rname):
+                    labels = [l.strip() for l in self.model.spec.labels[rname].split(",")]
+                else:
+                    labels = []
                 labels.append(rname)
-                actions.append((G.lts.tpred[rname], labels))
+                actions[self.lts.tpred[rname]] = labels
             checker = mc.ARCTL_model_checker(self.lts.states,
                                                      actions,
-                                                     true_label="_None")
+                                                     tau_label="_None")
             cache[None] = checker
         return checker.check(self.phi)
 
