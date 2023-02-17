@@ -42,7 +42,7 @@ rdecl =
     ;
 
 rule =
-    { "[" label:/[^\]]+/ "]" }?
+    { "[" label:/[^\]]*/ "]" }?
     ","%{ left:varstate }+ ">>" ","%{ right:varstate }+ {nl}+
     ;
 

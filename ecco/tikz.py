@@ -183,8 +183,7 @@ def tikz (nodes, edges) :
                       f"anchor={anchor},"
                       f"rotate={math.degrees(-row['text-rotation'])},")
             if row["text-wrap"] == "wrap" :
-                out.write(f"text width={row['width']}pt,"
-                          f"text centered,")
+                out.write(f"align=center,")
             out.write(f"] at (n{node}.{pos})"
                       f" {{\\fontsize{{{row['font-size']}pt}}{{{row['font-size']}pt}}"
                       f"\\selectfont {esc(row['label'])}}};\n")
@@ -209,7 +208,9 @@ def tikz (nodes, edges) :
                             f"{row['line-style']},")
         out.write(f"] (n{src}) to [")
         if row["curve-style"] == "bezier" and (tgt, src) in edges.index :
-            out.write("bend right=20,")
+            ends = nodes[nodes.index.isin({src, tgt})][["x", "y"]].transpose()
+            dist = ((ends[src] - ends[tgt]) ** 2).sum() ** .5
+            out.write(f"bend left={50/dist},")
         out.write(f"]")
         if str(row["label"]).strip() :
             out.write(f" node["

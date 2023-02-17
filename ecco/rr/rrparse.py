@@ -208,7 +208,7 @@ class rrParser(Parser):
 
         def block0():
             self._token('[')
-            self._pattern('[^\\]]+')
+            self._pattern('[^\\]]*')
             self.name_last_node('label')
             self._token(']')
         self._closure(block0)

@@ -2,7 +2,7 @@
 ECological COmputation
 """
 
-import functools, pathlib, importlib
+import functools, pathlib, importlib, operator
 
 from inspect import Signature, Parameter
 

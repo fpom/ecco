@@ -1,3 +1,4 @@
+ * various minor improvement
  * bugs fixed
  * updated documentation
 

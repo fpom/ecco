@@ -183,9 +183,13 @@ class NotNet (object) :
     ## i/o
     ##
     def to_tina (self, stream, name="NET") :
-        for kind, family in (("cond", "nodes"), ("event", "nodes"),
-                             ("reset", "arcs"), ("succ", "arcs"),
-                             ("conflict", "arcs")) :
+        for kind, family in (
+                # Petri nets extensions
+                ("reset", "arcs"),
+                # unfoldings
+                ("cond", "nodes"), ("event", "nodes"),
+                # event structures
+                ("succ", "arcs"), ("conflict", "arcs")) :
             if getattr(self, kind, None) :
                 raise ValueError(f"tina does not support {kind} {family}")
         stream.write(f"net {{{name}}}\n")

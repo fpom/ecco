@@ -295,7 +295,7 @@ class Parser (object) :
                           for state, _, description, _ in st.decl)
     def rule (self, st) :
         """
-        { "[" label:/[^\]]+/ "]" }?
+        { "[" label:/[^\]]*/ "]" }?
         ","%{ left:varstate }+ ">>" ","%{ right:varstate }+ {nl}+
         """
         if st.label :

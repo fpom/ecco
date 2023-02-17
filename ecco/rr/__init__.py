@@ -1,5 +1,5 @@
 import itertools, re, tempfile, functools, subprocess, warnings, sys, operator
-import ptnet, prince, its, ddd, sympy
+import prince, its, ddd, sympy
 import pandas as pd
 import numpy as np
 import bqplot as bq
@@ -240,7 +240,7 @@ class Model (BaseModel) :
                     out.write(fr"\RRoff{{{d.state.name}}}")
                 out.write(f": {d.description}\n")
         if names :
-            width = max(len(r.text())
+            width = max(len(r.text()) + (len("["+r.label.strip()+"] ") if r.label else 0)
                         for rules in (self.spec.constraints, self.spec.rules)
                         for r in rules)
         if cols :
@@ -269,7 +269,7 @@ class Model (BaseModel) :
                         else :
                             out.write(fr"\RRoff{{{s.name}}}")
                     if names :
-                        out.write(" " * (2 + width - len(rule.text())))
+                        out.write(" " * (2 + width - len(rule.text()) - (len("["+rule.label.strip()+"] ") if rule.label else 0)))
                         out.write(fr"\RRcmt{{{rule.name()}}}")
                     out.write("\n")
         out.write(r"\end{Verbatim}" "\n")
@@ -904,6 +904,7 @@ class Model (BaseModel) :
                         assert off not in action.left
                         assert on not in action.right
                         assert off not in action.right
+            net.remove_loops()
         else :
             raise ValueError(f"unsupported Petri net class: {kind!r}")
         return net
@@ -1190,7 +1191,8 @@ class ComponentGraph (object) :
             def lbl (rules) :
                 labels = set()
                 for r in rules :
-                    labels.update(l.strip() for l in spec_labels.get(r).split(",")
+                    labels.update(l.strip()
+                                  for l in (spec_labels.get(r) or "").split(",")
                                   if l.strip())
                 return hset(labels)
             edges["labels"] = edges["rules"].apply(lbl)
@@ -1280,7 +1282,7 @@ class ComponentGraph (object) :
          - `prop, ...` (`str`): at least one property to be removed
         """
         props, _ = self._get_args(args, min_props=1, max_compo=0)
-        alias = {a : p for p, a in self.tls.alias.items()}
+        alias = {a : p for p, a in self.lts.alias.items()}
         for prop in props :
             prop = alias.get(prop, prop)
             for c in self.components :
@@ -1423,7 +1425,7 @@ class ComponentGraph (object) :
                 rem.append(c)
                 add.extend(keep)
         return self._patch(rem, add)
-    def split_basins (self, *args) :
+    def split_basins (self, *args, merge=False) :
         """split some components into the basins to some other components
 
         The basin to a component `c` is the set of states that may
@@ -1432,10 +1434,12 @@ class ComponentGraph (object) :
         components `1` and `2` wrt the basins of `3` and `4`.
 
         Parameters:
-         - `mumber, ...` (`int`): a series of at least one component
+         - `number, ...` (`int`): a series of at least one component
            number to be split
          - `[number, ...]` (`list[int]`): a list of at least one
            component whose basins will be considered for splits
+         - `merge` (`bool=False`): whether to merge basins leading
+            only to a single component with this component
         """
         _, split = self._get_args(args[:-1], min_compo=1, max_props=0)
         _, dest = self._get_args(args[-1], min_compo=1, max_props=0)
@@ -1445,6 +1449,16 @@ class ComponentGraph (object) :
             split = [s for c in split for s in c.split(f"basin({d.num})", basin)
                      if s is not None]
         new = set(split)
+        if merge :
+            for c in split :
+                reach = [d for d in dest
+                        if ((f"basin({d.num})",setrel.ISIN) in c.props
+                            or (f"basin({d.num})",setrel.EQUALS) in c.props)]
+                if len(reach) == 1 :
+                    d = reach[0]
+                    new.remove(c)
+                    new.add(c.merge(d))
+                    old.add(d)
         return self._patch(list(old - new), list(new - old))
     _relmatch = {(setrel.HASNO, True) : {setrel.HASNO},
                  (setrel.HASNO, False) : {setrel.HASNO},
