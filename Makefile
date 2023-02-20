@@ -3,7 +3,7 @@ VERSION=$$(git tag|tail -n1)
 remote:
 	docker run -p 8000:8000 franckpommereau/ecco jupyterhub
 
-local: build
+local:
 	docker run -p 8000:8000 ecco jupyterhub
 
 build:
