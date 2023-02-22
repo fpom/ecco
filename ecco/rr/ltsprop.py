@@ -154,7 +154,7 @@ class ARCTLProp (Prop) :
                     labels = []
                 labels.append(rname)
                 actions[self.lts.tpred[rname]] = labels
-            checker = mc.ARCTL_model_checker(self.lts.states,
+            checker = mc.FARCTL_model_checker(self.lts.states,
                                                      actions,
                                                      tau_label="_None")
             cache[None] = checker

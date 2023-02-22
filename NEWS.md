@@ -1,5 +1,5 @@
  * various minor improvement
- * bugs fixed
+ * minor bugs fixed
  * updated documentation
 
 ## Version 0.5
