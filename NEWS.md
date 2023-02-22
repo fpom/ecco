@@ -1,3 +1,4 @@
+ * updated model-checker `pymc`
  * various minor improvement
  * minor bugs fixed
  * updated documentation

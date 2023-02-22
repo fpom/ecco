@@ -17,7 +17,7 @@ RUN rm -f /root/libDDD.tar.gz
 RUN ldconfig
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pyddd.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pyits.git
-RUN pip3 install --no-cache-dir git+https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker.git
+RUN pip3 install --no-cache-dir git+https://github.com/fpom/pymc.git
 RUN pip3 install --no-cache-dir /root/ecco.git
 RUN git clone https://github.com/giannkas/ecofolder.git /root/ecofolder.git
 RUN cd /root/ecofolder.git && make clean && make
