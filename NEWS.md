@@ -1,3 +1,6 @@
+## Version 0.6
+
+ * added unfolding of the Petri nets semantics of RR
  * updated model-checker `pymc`
  * various minor improvement
  * minor bugs fixed

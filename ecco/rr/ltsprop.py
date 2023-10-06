@@ -72,6 +72,15 @@ class StateProp (Prop) :
         if states is None :
             states = self.states
         return self.lts.states - states
+    def _do_pick (self, states=None) :
+        if states is None :
+            states = self.states
+        for x in states.explicit():
+            return x
+    def _do_scc (self, states=None) :
+        if states is None :
+            states = self.states
+        return self._do_succ_s(states) & self._do_pred_s(states)
     def _do_succ (self, states=None) :
         if states is None :
             states = self.states

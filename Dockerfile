@@ -8,7 +8,7 @@ RUN useradd --skel /etc/skel --create-home --password ec2saXpWqj10U --user-group
 RUN apt-get -y upgrade
 RUN apt-get -y autoclean
 RUN npm install -g configurable-http-proxy
-RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyterhub jupyter networkx pandas numpy bqplot colour bitarray sympy cython tatsu==5.5.0 psutil prince pydot python-igraph ipycytoscape
+RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyterhub jupyter networkx pandas numpy bqplot colour bitarray sympy cython tatsu==5.5.0 psutil prince pydot python-igraph ipycytoscape unidecode
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pytl.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/cunf-ptnet-py3.git
 RUN cd /root && wget -nv https://github.com/fpom/pyddd/raw/master/libDDD.tar.gz
@@ -19,7 +19,7 @@ RUN pip3 install --no-cache-dir git+https://github.com/fpom/pyddd.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pyits.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pymc.git
 RUN pip3 install --no-cache-dir /root/ecco.git
-RUN git clone https://github.com/giannkas/ecofolder.git /root/ecofolder.git
+RUN git clone https://github.com/fpom/ecofolder.git /root/ecofolder.git
 RUN cd /root/ecofolder.git && make clean && make
-RUN cp -a /root/ecofolder.git/ecofolder /root/ecofolder.git/mci2dot root/ecofolder.git/mci2dot_ev /root/ecofolder.git/pr_encoding /root/ecofolder.git/rs_complement /usr/local/bin/
+RUN cp -a /root/ecofolder.git/ecofolder /root/ecofolder.git/mci2dot root/ecofolder.git/mci2dot_ev /root/ecofolder.git/pr_encoding /root/ecofolder.git/mci2csv /root/ecofolder.git/rs_complement /usr/local/bin/
 RUN rm -rf /root/*.git

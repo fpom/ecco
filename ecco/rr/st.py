@@ -1,5 +1,7 @@
 import collections, ast, token, itertools, re, pathlib
 
+from unidecode import unidecode
+
 from .. import CompileError, Record
 from .rrparse import rrParser
 
@@ -264,8 +266,9 @@ class Parser (object) :
     def __init__ (self, path, source=None) :
         self._path = path
         self._parser = rrParser()
-        self._source = (source or open(path, encoding="utf-8",
-                                       errors="ignore").read()) + "\n"
+        src = (source
+               or open(path, encoding="utf-8", errors="replace").read()) + "\n"
+        self._source = unidecode(src)
     def parse (self, rule="start") :
         self._meta = []
         self._constraints = []

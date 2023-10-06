@@ -1,4 +1,4 @@
-import re, io, subprocess
+import re, subprocess
 
 from functools import reduce
 from itertools import chain
