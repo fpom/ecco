@@ -1,3 +1,5 @@
+ * updated documentation
+
 ## Version 0.6
 
  * added unfolding of the Petri nets semantics of RR

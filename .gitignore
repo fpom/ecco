@@ -6,3 +6,4 @@ snapshot.py
 /.python-version
 .ipynb_checkpoints
 doc/termites/
+pyrightconfig.json

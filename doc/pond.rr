@@ -1,0 +1,14 @@
+agents :
+    Su- : summer
+    P+ :  pond
+    PF- : piscivorous fishes
+    IF-:  insectivorous fishes
+
+rules :
+    P-  >> PF-, IF-
+    Su+ >> P-
+    P+  >> PF+, IF+
+    PF+ >> IF-
+    IF- >> PF-
+    Su+ >> Su-
+    Su- >> Su+

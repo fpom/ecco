@@ -368,27 +368,6 @@ class XPN (SPN) :
         self.add_arc("read", source, target)
     def add_reset (self, source, target) :
         self.add_arc("reset", source, target)
-    def unfold (self, base=None) :
-        with tempfile.TemporaryDirectory() as tmp :
-            if base is None :
-                base = pathlib.Path(tmp)
-            else :
-                base = pathlib.Path(base)
-            mci = base.with_suffix(".mci")
-            pre = (mci.parent / (mci.stem + "_pr")).with_suffix(".ll_net")
-            pep = mci.with_suffix(".ll_net")
-            self.to_pep(pep.open("w"))
-            try :
-                subprocess.check_output(["pr_encoding", str(pep)],
-                                        stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as err :
-                raise RuntimeError(err.stdout)
-            try :
-                subprocess.check_output(["ecofolder", str(pre), "-m", str(mci)],
-                                        stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as err :
-                raise RuntimeError(err.stdout)
-            return UNF.from_mci(mci.open("rb"))
 
 class EPN (XPN) :
     "XPN extended with inhibitor-arcs"

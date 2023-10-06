@@ -1085,14 +1085,14 @@ class Model(BaseModel):
             stream.write("\n".join(arcs[kind]))
             stream.write("\n")
 
-    def unfold(self, events=True, compress=True, epn=True):
+    def unfold(self, petri=False, compress=True):
         """Unfold the Petri net semantics of the RR model
         The RR model is converted to a Petri net, then this net is unfolded
         using `ecofolder`, and finally the resulting unfolding is displayed
         either as a Petri net or as the corresponding event structure.
 
         Options:
-         - events (`True`): if `True`, display the event structure, otherwise,
+         - petri (`False`): if `False`, display the event structure, otherwise,
            display the unfolding
          - compress (`True`): use option `-c` of `ecofolder` to aggregate
            redundant pre/post conditions
@@ -1105,7 +1105,7 @@ class Model(BaseModel):
         nodes_path = mci_path.with_name(prn + "_nodes").with_suffix(".csv")
         edges_path = nodes_path.with_name(prn + "_edges").with_suffix(".csv")
         with open(pep_path, "w") as stream:
-            self.pep(stream, epn)
+            self.pep(stream, True)
         subprocess.check_output(["pr_encoding", pep_path],
                                 stderr=subprocess.STDOUT,
                                 encoding="ascii", errors="replace")
@@ -1149,7 +1149,10 @@ class Model(BaseModel):
                    "nodes_draw_width": .6,
                    "nodes_label": "name",
                    "edges_label": ""}
-        if events:
+        if petri:
+            t2s = {"condition": "ellipse", "event": "rectangle"}
+            options["nodes_shape"] = nodes["type"].apply(t2s.get)
+        else:
             nodes = nodes[nodes["type"] == "event"]\
                 .drop(columns=["type", "tokens"])
             events = set(nodes["node"])
@@ -1181,9 +1184,6 @@ class Model(BaseModel):
             options["edges_target_tip"] = edges["type"].apply(t2t.get)
             t2s = {"conflict": ":", "causality": "|"}
             options["edges_draw_style"] = edges["type"].apply(t2s.get)
-        else:
-            t2s = {"condition": "ellipse", "event": "rectangle"}
-            options["nodes_shape"] = nodes["type"].apply(t2s.get)
 
         def mkcolors(row):
             tokens = row.get("tokens", None)
