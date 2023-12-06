@@ -35,7 +35,27 @@ One may find such an early version of `ecco` here: [DOI:10.5281/zenodo.3241370](
 
 `ecco` is documented through Jupyter notebooks that can be found into directory `doc`.
 
-## Quickstart
+## Trying `ecco` with zero installation
+
+ * go to [Play with Docker](https://labs.play-with-docker.com/)
+ * login to the service, using one of the proposed accounts (you must have one)
+ * click the _Start_ button
+   * if the server is overloaded you get an error message, just go back and click _Start_ again
+   * you eventually get a page with a 4 hours countdown, this is the time you have to play with `ecco`
+* click _ADD NEW INSTANCE_ on the left
+* after a few seconds, you get a shell (large black rectangle filled with gibberish), at the prompt `$ ` type or copy/paste `docker run -p 8000:8000 franckpommereau/ecco jupyterhub`
+  * this will display a bunch of progress bars
+  * wait until it's all finished (it may take a loooong time)
+  * `ecco` ready to use when you see a line like `[I 2023-12-06 16:44:27.283 JupyterHub app:3245] JupyterHub is now running at http://:8000`
+* click _OPEN PORT_ at the top of the page and type `8000` at the prompt
+  * alternatively, wait for a link `8000` to appear next to the button and click it
+* this pops-up a new browser window
+  * login as user `ecco` with password `ecco`
+  * you get a working Jupyter with `ecco` installed
+  * either upload your notebook and files or go to folder `doc` to get some examples
+* when you are done with `ecco`, go back to Play with Docker and click _CLOSE SESSION_
+
+## Quickstart on your own machine
 
 `ecco` is available as a Docker image so you don't need to install it.
 But of course you need to have Docker installed.

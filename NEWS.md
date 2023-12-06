@@ -1,3 +1,4 @@
+ * updated `README.md` to use Play with Docker
  * updated documentation
 
 ## Version 0.6
