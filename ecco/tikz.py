@@ -143,6 +143,9 @@ def getcolor (code) :
         rgb = None
     return colors.get(rgb, "white")
 
+def nn(name):
+    return "".join(c for c in name if c not in ",")
+
 def tikz (nodes, edges) :
     global colors
     colors = {}
@@ -173,7 +176,7 @@ def tikz (nodes, edges) :
                       f"line width={row['border-width']}pt,"
                       f"{row['border-style']}")
         out.write(f"]"
-                  f" (n{node}) at ({row['x']},{row['y']}) {{}};\n")
+                  f" (n{nn(node)}) at ({row['x']},{row['y']}) {{}};\n")
         # label
         if str(row["label"]).strip() :
             pos, anchor = _align[tuple(row[["text-halign", "text-valign"]])]
@@ -184,7 +187,7 @@ def tikz (nodes, edges) :
                       f"rotate={math.degrees(-row['text-rotation'])},")
             if row["text-wrap"] == "wrap" :
                 out.write(f"align=center,")
-            out.write(f"] at (n{node}.{pos})"
+            out.write(f"] at (n{nn(node)}.{pos})"
                       f" {{\\fontsize{{{row['font-size']}pt}}{{{row['font-size']}pt}}"
                       f"\\selectfont {esc(row['label'])}}};\n")
     for (src, tgt), row in edges.iterrows() :
@@ -206,7 +209,7 @@ def tikz (nodes, edges) :
                   out.write(f"draw={getcolor(row['line-color'])},"
                             f"line width={row['width']}pt,"
                             f"{row['line-style']},")
-        out.write(f"] (n{src}) to [")
+        out.write(f"] (n{nn(src)}) to [")
         if row["curve-style"] == "bezier" and (tgt, src) in edges.index :
             ends = nodes[nodes.index.isin({src, tgt})][["x", "y"]].transpose()
             dist = ((ends[src] - ends[tgt]) ** 2).sum() ** .5
@@ -228,7 +231,7 @@ def tikz (nodes, edges) :
             out.write(f"] {{\\fontsize{{{row['font-size']}pt}}"
                       f"{{{row['font-size']}pt}}"
                       f"\\selectfont {esc(row['label'])}}}")
-        out.write(f" (n{tgt});\n")
+        out.write(f" (n{nn(tgt)});\n")
     out.write("\\end{tikzpicture}\n")
     return out.getvalue()
 

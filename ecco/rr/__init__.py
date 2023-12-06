@@ -2081,7 +2081,7 @@ class ComponentGraph(object):
             n_iter=3,
             copy=True,
             check_input=True,
-            engine="auto",
+            engine="sklearn",
             random_state=42,
             rescale_with_mean=True,
             rescale_with_std=True):
@@ -2115,6 +2115,26 @@ class ComponentGraph(object):
             trans.loc[idx] = [0, 0]
         return trans
 
+    def _convert_nodes_label(self, txt, **args):
+        "convert labels for states"
+        txt = str(txt)
+        if not txt:
+            return ""
+        icons = []
+        try:
+            if "has_init" in args["topo"]:
+                icons.append("▶")
+            if "has_scc" in args["topo"] or "is_hull" in args["topo"]:
+                icons.append("⏺")
+            if "has_dead" in args["topo"] or "is_dead" in args["topo"]:
+                icons.append("⏹")
+        except Exception:
+            pass
+        if icons:
+            return f"{txt}\n{''.join(icons)}"
+        else:
+            return txt
+
     def draw(self, **opt):
         """draw the component graph
 
@@ -2140,6 +2160,7 @@ class ComponentGraph(object):
         options = dict(nodes_fill_color="size",
                        nodes_fill_palette=("red-green/white", "abs"),
                        layout_extra=layout_extra,
+                       nodes_label_str=self._convert_nodes_label,
                        edges_label="rules")
         options.update(opt)
         return Graph(self.nodes, self.edges, **options)

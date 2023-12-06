@@ -1,11 +1,12 @@
-import base64
 import inspect
 import math
 import mimetypes
 import pathlib
 import subprocess
 import tempfile
+
 from math import pi
+from urllib.parse import quote
 
 import igraph as ig
 import ipycytoscape as cy
@@ -13,6 +14,7 @@ import ipywidgets as ipw
 import networkx as nx
 import numpy as np
 import pandas as pd
+
 from colour import Color
 from IPython.display import display
 from pandas.api.types import is_numeric_dtype
@@ -946,7 +948,7 @@ _export_html = "".join('''<html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
-<a download="{filename}" href="data:{mimetype};charset=utf-8;base64;,{payload}">
+<a download="{filename}" href="data:{mimetype};charset=utf-8,{payload}">
 Download {filename}
 </a>
 </body>
@@ -2038,7 +2040,7 @@ class Graph(object):
 
         def on_click(event):
             output.clear_output()
-            data = base64.b64encode(self._export(choice.value)).decode()
+            data = quote(self._export(choice.value))
             path = f"graph.{choice.value}"
             mime = mimetypes.guess_type(path, False)[0] or "text/plain"
             html = _export_html.format(filename=path,

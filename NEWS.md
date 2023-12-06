@@ -1,3 +1,4 @@
+ * minor bugfixes
  * updated `README.md` to use Play with Docker
  * updated documentation
 

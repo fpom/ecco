@@ -8,7 +8,7 @@ RUN useradd --skel /etc/skel --create-home --password ec2saXpWqj10U --user-group
 RUN apt-get -y upgrade
 RUN apt-get -y autoclean
 RUN npm install -g configurable-http-proxy
-RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyterhub jupyter networkx pandas numpy bqplot colour bitarray sympy cython tatsu==5.5.0 psutil prince pydot python-igraph ipycytoscape unidecode
+RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyterhub jupyter networkx pandas numpy bqplot colour bitarray sympy cython tatsu==5.5.0 psutil prince pydot python-igraph ipycytoscape unidecode scikit-learn
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pytl.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/cunf-ptnet-py3.git
 RUN cd /root && wget -nv https://github.com/fpom/pyddd/raw/master/libDDD.tar.gz
