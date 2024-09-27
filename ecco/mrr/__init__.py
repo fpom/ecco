@@ -1,534 +1,450 @@
-import re, subprocess
+import re
 
-from functools import reduce
-from itertools import chain
-from operator import or_
-from typing import Set, Sequence, Optional, Union
+from itertools import product
+from collections import defaultdict
 
-from .mrrparse import Lark_StandAlone, Transformer, v_args, Token, ParseError, Indenter
+import pandas as pd
 
-##
-## errors
-##
+from colour import Color
 
-def _error (line, column, message, errcls=ParseError) :
-    if column is not None :
-        err = errcls(f"[{line}:{column}] {message}")
-    else :
-        err = errcls(f"[{line}] {message}")
-    err.line, err.column = line, column
-    raise err
+from .parser import parse, parse_src
+from .cg import ComponentGraph
+from .lts import topo, setrel
+from .. import BaseModel, hset
+from ..cygraphs import Graph
+from ..ui import HTML
 
-def _assert (test, line, column, message, errcls=ParseError) :
-    if not test :
-        _error(line, column, message, errcls)
 
-##
-## source preprocessing
-##
+class Model(BaseModel):
+    @classmethod
+    def parse(cls, path, *extra):
+        return cls(path, parse(path, *extra))
 
-_cpp_head = subprocess.run(["cpp", "--traditional", "-C"],
-                           input="", encoding="utf-8",
-                           capture_output=True).stdout
+    @classmethod
+    def parse_src(cls, path, source, *extra):
+        return cls(path, parse_src(source, *extra))
 
-_line_dir = re.compile('^#\s+([0-9]+)\s+"<stdin>"\s*$')
-
-def cpp (text, **var) :
-    out = subprocess.run(["cpp", "--traditional", "-C"]
-                         + [f"-D{k}={v}" for k, v in var.items()],
-                         input=text, encoding="utf-8", capture_output=True).stdout
-    out = out.replace(_cpp_head, "")
-    # we don't use cpp -P but remove line directives because otherwise some
-    # empty lines are missing at the beginning
-    # + we remove comments
-    return "".join((line.split("#", 1)[0]).rstrip() + "\n"
-                   for line in out.splitlines()
-                   if not _line_dir.match(line))
-
-##
-## model
-##
-
-class _Element (object) :
-    def __init__ (self, line: int, column: Optional[int]=None) :
-        self.line = line
-        self.column = column
-    def _error (self, message, errcls=ParseError) :
-        _error(self.line, self.column, message, errcls)
-    def _assert (self, test, message, errcls=ParseError) :
-        _assert(test, self.line, self.column, message, errcls)
-
-def _repr_pretty_ (obj, fields, p, cycle) :
-    cls = obj.__class__.__name__
-    if cycle :
-        p.text("<%s ...>" % cls)
-    else :
-        with p.group(len(cls)+1, f"{cls}(", ")") :
-            for i, name in enumerate(fields) :
-                if i :
-                    p.text(", ")
-                    p.breakable()
-                with p.group(len(name)+1, f"{name}=", "") :
-                    value = getattr(obj, name)
-                    if isinstance(value, tuple) :
-                        value = list(value)
-                    p.pretty(value)
-
-class VarDecl (_Element) :
-    def __init__ (self,
-                  # source line number
-                  line: int,
-                  # variable name
-                  name: str,
-                  # variable domain (possible values)
-                  domain: Set[int],
-                  # if not None: array length
-                  size: Optional[int],
-                  # initial values
-                  init: Union[int, Sequence[int]],
-                  # textual description
-                  description: str) :
-        super().__init__(line)
-        self._assert(size is None or size > 0, "invalid size")
-        init = self._init_dom(init, domain)
-        if size is None :
-            self._assert(isinstance(init, set), "invalid initial state")
-        elif isinstance(init, set) :
-            init = [init] * size
-        else :
-            self._assert(len(init) == size, "array/init size mismatch")
-        self.name = name
-        self.domain = domain
-        self.size = size
-        self.init = init
-        self.description = description
-    def _init_dom (self, init, dom) :
-        if init is None :
-            init = dom
-        elif isinstance(init, int) :
-            init = {init} & dom
-        elif isinstance(init, set) :
-            init = init & dom
-        elif isinstance(init, Sequence) :
-            return [self._init_dom(i, dom) for i in init]
-        else :
-            self._error("invalid initial state")
-        self._assert(init, "invalid initial state")
-        return init
-    def __str__ (self) :
-        if self.size is None :
-            idx = ""
-        else :
-            idx = f"[{self.size}]"
-        return (f"{{{min(self.domain)}..{max(self.domain)}}}{idx} {self.name}"
-                f" = {self.init} : {self.description}")
-    def __repr__ (self) :
-        return (f"{self.__class__.__name__}({self.line}, {self.column}, {self.name!r},"
-                f" {self.domain!r}, {self.size}, {self.init!r}, {self.description!r})")
-
-class VarUse (_Element) :
-    def __init__ (self,
-                  # source line/column numbers
-                  line: int, column: int,
-                  # variable name
-                  name: str,
-                  # if not None, array index
-                  index: Optional[Union[int, str]]=None,
-                  # if not None, variable in other location
-                  locrel: Optional[str]=None,
-                  # if not None, inner location name
-                  locname: Optional[str]=None,
-                  # if not None, inner location index
-                  locidx: Optional[Union[int, str]]=None) :
-        super().__init__(line, column)
-        self._assert(locrel in (None, "outer", "inner"),
-                     f"invalid location relation {locrel!r}",
-                     ValueError)
-        self._assert(locname is None if locrel is None else True,
-                     "locname should be None",
-                     TypeError)
-        self._assert(locidx is None if locrel is None else True,
-                     "locidx should be None",
-                     TypeError)
-        self._assert(locname is None if locrel == "outer" else True,
-                     "outer location cannot be named",
-                     TypeError)
-        self._assert(locidx is None if locrel == "outer" else True,
-                     "outer location cannot be indexed",
-                     TypeError)
-        self._assert(locname is not None if locrel == "inner" else True,
-                     "missing value for locname",
-                     TypeError)
-        self.name = name
-        self.index = index
-        self.locrel = locrel
-        self.locname = locname
-        self.locidx = locidx
-    def __str__ (self) :
-        if self.index is None :
-            idx = ""
-        else :
-            idx = f"[{self.index}]"
-        if self.locrel is None :
-            at = ""
-        elif self.locrel == "outer" :
-            at = f"@@"
-        elif self.locidx is None :
-            at = f"@{self.locname}"
-        else :
-            at = f"@{self.locname}[{self.locidx}]"
-        return f"{self.name}{idx}{at}"
-    def __repr__ (self) :
-        args = [str(self.line), str(self.column), repr(self.name), repr(self.index)]
-        if self.locrel is not None :
-            args.append(repr(self.locrel))
-            if self.locname is not None :
-                args.append(repr(self.locname))
-                if self.locidx is not None :
-                    args.append(repr(self.locidx))
-        return f"{self.__class__.__name__}({', '.join(args)})"
-    def make (self, loc, index) :
-        if self.locrel is None :
-            self._assert(self.name in loc.var,
-                         f"no local variable {self.name}")
-            self.decl = loc.var[self.name]
-        elif self.locrel == "outer" :
-            self._assert(loc.parent is not None, "no outer location")
-            self._assert(self.name in loc.parent.var,
-                         f"no outer variable {self.name}")
-            self.decl = loc.parent.var[self.name]
-        else :
-            self._assert(self.locname in loc.sub,
-                         f"no inner location {self.locname!r}")
-            self._assert(self.name in loc.sub[self.locname].var,
-                         f"no outer variable {self.name}")
-            self._assert(loc.sub[self.locname].size is not None
-                         if self.locidx is not None else True,
-                         f"indexing non-array location {self.locname!r}")
-            self._assert(0 <= self.locidx < loc.sub[self.locname].size
-                         if isinstance(self.locidx, int) else True,
-                         f"invalid index for {self.locname!r}"
-                         f"[{loc.sub[self.locname].size}]")
-            self.decl = loc.sub[self.locname].var[self.name]
-        if isinstance(self.index, str) :
-            index.setdefault(self.index, set(self.decl.domain))
-            index[self.index] &= self.decl.domain
-        if isinstance(self.locidx, str) :
-            index.setdefault(self.locidx, set(range(loc.sub[self.locname].size)))
-            index[self.locidx] &= set(range(loc.sub[self.locname].size))
-
-class BinOp (_Element) :
-    def __init__ (self,
-                  # source line/column numbers
-                  line: int, column: int,
-                  # expression left-hand side
-                  left: Union[VarUse, int],
-                  # infix operator
-                  op: str,
-                  # expression right-hand side
-                  right: Union[VarUse, int]) :
-        super().__init__(line, column)
-        self.left = left
-        self.op = op
-        self.right = right
-    def __str__ (self) :
-        return f"{self.left}{self.op}{self.right}"
-    def __repr__ (self) :
-        return (f"{self.__class__.__name__}({self.line}, {self.column},"
-                f" {self.left!r}, {self.op!r}, {self.right!r})")
-    def make (self, loc, index) :
-        if isinstance(self.left, VarUse) :
-            self.left.make(loc, index)
-        if isinstance(self.right, VarUse) :
-            self.right.make(loc, index)
-
-class Assignment (_Element) :
-    def __init__ (self,
-                  # source line/column numbers
-                  line: int, column: int,
-                  # assigned variable
-                  target: VarUse,
-                  # expression assigned to variable
-                  value: Union[VarUse, BinOp, int]) :
-        super().__init__(line, column)
-        self.target = target
-        self.value = value
-    def __str__ (self) :
-        return f"{self.target}={self.value}"
-    def __repr__ (self) :
-        return f"{self.__class__.__name__}({self.line}, {self.target!r}, {self.value!r})"
-    def _repr_pretty_ (self, p, cycle) :
-        _repr_pretty_(self, ["target", "value", "line", "column"], p, cycle)
-    def make (self, loc, index) :
-        self.target.make(loc, index)
-        if not isinstance(self.value, int) :
-            self.value.make(loc, index)
-
-class Action (_Element) :
-    def __init__ (self,
-                  # source line number
-                  line: int,
-                  # conditions
-                  left: Sequence[BinOp],
-                  # assignments
-                  right: Sequence[Assignment],
-                  # tags
-                  tags: Sequence[str]=[]) :
-        super().__init__(line)
-        self.left = tuple(left)
-        self.right = tuple(right)
-        self.tags = tuple(tags)
-        self.index = {}
-    def __str__ (self) :
-        return "".join([f"[{', '.join(self.tags)}] " if self.tags else "",
-                        ", ".join(str(c) for c in self.left),
-                        " >> ",
-                        ", ".join(str(a) for a in self.right)])
-    def __repr__ (self) :
-        return (f"{self.__class__.__name__}({self.line}"
-                f", [{', '.join(repr(c) for c in self.left)}]"
-                f", [{', '.join(repr(a) for a in self.right)}]"
-                f", {self.tags!r}")
-    def _repr_pretty_ (self, p, cycle) :
-        _repr_pretty_(self, ["left", "right", "tags", "line"], p, cycle)
-    def make (self, loc) :
-        for cond in self.left :
-            cond.make(loc, self.index)
-        for assign in self.right :
-            assign.make(loc, self.index)
-        for idx in self.index :
-            pass # check that idx is not a variable
-
-class Location (_Element) :
-    def __init__ (self,
-                  # source line number
-                  line: int,
-                  # local variables
-                  variables: Sequence[VarDecl],
-                  # constraints
-                  constraints: Sequence[Action],
-                  # rules
-                  rules: Sequence[Action],
-                  # nested locations
-                  locations: Sequence["Location"],
-                  # name if nested
-                  name: Optional[str]=None,
-                  # size of array
-                  size: Optional[int]=None) :
-        super().__init__(line)
-        if size == 0 :
-            raise ValueError("invalid array size")
-        self.variables = tuple(variables)
-        self.constraints = tuple(constraints)
-        self.rules = tuple(rules)
-        self.locations = tuple(locations)
-        self.name = name
-        self.size = size
-        self.sub = {loc.name : loc for loc in locations}
-        self.var = {v.name : v for v in variables}
-    def __str__ (self) :
-        parts = ["@"]
-        if self.name is not None :
-            parts.append(f"{self.name}")
-        if self.size is not None :
-            parts.append(f"[{self.size}]")
-        parts.append(f"(V={len(self.variables)},"
-                     f"C={len(self.constraints)},"
-                     f"R={len(self.rules)},"
-                     f"L={len(self.locations)})")
-        return "".join(parts)
-    def __repr__ (self) :
-        args = [str(self.line),
-                repr(self.variables),
-                repr(self.constraints),
-                repr(self.rules),
-                repr(self.locations)]
-        if self.name is not None :
-            args.append(repr(self.name))
-        if self.size is not None :
-            args.append(repr(self.size))
-        return f"{self.__class__.__name__}({', '.join(args)})"
-    def _repr_pretty_ (self, p, cycle) :
-        _repr_pretty_(self, ["variables", "constraints", "rules", "locations",
-                             "name", "size", "line"], p, cycle)
     @property
-    def actions (self) :
-        yield from self.constraints
-        yield from self.rules
-    def make (self, parent=None) :
-        self.parent = parent
-        for loc in self.locations :
-            loc.make(self)
-        for act in self.actions :
-            act.make(self)
+    def mrr(self):
+        """Show MRR source code.
 
-##
-## parser
-##
+        The code shown is reconstructed from parsed source, so it may have some
+        differences with it (and is usually clearer).
+        """
+        h = HTML()
+        with h("pre", style="font-family:mono;line-height:140%;"):
+            self.spec.__html__(h)
+        return h
 
-def _int (tok, min=None, max=None, message="invalid int litteral") :
-    try :
-        val = int(tok.value)
-        if min is not None :
-            assert val >= min
-        if max is not None :
-            assert val <= max
-        return val
-    except :
-        _error(tok.line, tok.column, message)
+    def charact(self, constraints=True, variables=None, plot=True):
+        """Show variables characterisation.
 
-@v_args(inline=True)
-class MRRTrans (Transformer) :
-    def start (self, model) :
-        model.make()
-        return model
-    def model (self, variables, constraints, rules, *locations) :
-        line = None
-        for obj in chain(variables, constraints, rules, locations) :
-            line = getattr(obj, "line", None)
-            if line is not None :
-                break
-        return Location(line,
-                        variables or (),
-                        constraints or (),
-                        rules or (),
-                        locations)
-    def sequence (self, *args) :
-        return args
-    def location (self, name, size, model) :
-        model.name = name.value
-        model.line = name.line
-        if size is not None :
-            model.size = _int(size, 1, None, "invalid array size")
-        return model
-    def vardecl_long (self, typ, name, init, desc) :
-        typ, size = typ
-        if isinstance(init, Sequence) :
-            init = [i & typ for i in init]
-        else :
-            init & typ
-        if size is None :
-            _assert(not isinstance(init, Sequence), name.line, None,
-                    "cannot initialise scalar with array")
-        else :
-            if not isinstance(init, Sequence) :
-                init = [init] * size
-            elif init.shape != typ.size :
-                _error(name.line, None, "type/init size mismatch")
-        return VarDecl(name.line, name.value, typ, size, init, desc.value.strip())
-    def vardecl_short (self, name, sign, desc) :
-        if sign.value == "+" :
-            init = {1}
-        elif sign.value == "-" :
-            init = {0}
-        elif sign.value == "*" :
-            init = {0, 1}
-        else :
-            _error(name.line, None, f"unexpected initial value {sign.value!r}")
-        return VarDecl(name.line, name.value, {0, 1}, None, init, desc.value.strip())
-    def type (self, dom, size) :
-        if size is None :
-            return dom, None
-        else :
-            return dom, _int(size, 1, None, "invalid array size")
-    def type_bool (self) :
-        return {0, 1}
-    def type_interval (self, start, end) :
-        return set(range(_int(start), _int(end)+1))
-    def init (self, *args) :
-        if any(a is None for a in args) :
-            return None
-        else :
-            return reduce(or_, args)
-    def init_int (self, min, max) :
-        if max is None :
-            return {_int(min)}
-        else :
-            return set(range(_int(min), _int(max)+1))
-    def init_all (self) :
-        return None
-    def actdecl (self, tags, *args) :
-        if tags is not None :
-            tags = tuple(t.strip() for t in tags.value[1:-1].split(",") if t.strip())
-            line = tags.line
-        else :
-            line = args[0].line
-        left, right = [], []
-        for arg in args :
-            if isinstance(arg, BinOp) :
-                left.append(arg)
-            else :
-                right.append(arg)
-        return Action(line, left, right, tags or ())
-    def condition_long (self, left, op, right) :
-        line, column = left.line, left.column
-        if isinstance(left, Token) :
-            column -= len(left.value) - 1
-            left = _int(left)
-        if isinstance(right, Token) :
-            right = _int(right)
-        return BinOp(line, column, left, op, right)
-    def condition_short (self, var, op) :
-        if op.value == "+" :
-            return BinOp(var.line, var.column, var, "==", 1)
-        elif op.value == "-" :
-            return BinOp(var.line, var.column, var, "==", 0)
-        else :
-            _error(op.line, op.column + 1 - len(op.value),
-                   f"invalid condition {op.value!r}")
-    def var (self, name, index, at) :
-        if at is None :
-            locrel = locname = locidx = None
-        elif at == "outer" :
-            locrel, locname, locidx = "outer", None, None
-        else :
-            locrel, locname, locidx = at
-        return VarUse(name.line, name.column + 1 - len(name.value), name.value, index,
-                      locrel, locname, locidx)
-    def at_inner (self, name, index) :
-        return "inner", name.value, index
-    def at_outer (self, at) :
-        return "outer"
-    def index (self, idx) :
-        try :
-            idx = idx.value
-            idx = int(idx)
-        except :
-            pass
-        return idx
-    def assignment_long (self, target, assign, value) :
-        if isinstance(value, Token) :
-            value = _int(value)
-        if assign.value[0] == "+" :
-            value = BinOp(target.line, target.column, target, "+", value)
-        elif assign.value[0] == "-" :
-            value = BinOp(target.line, target.column, target, "-", value)
-        return Assignment(target.line, target.column, target, value)
-    def assignment_short (self, var, op) :
-        if op == "++" :
-            return Assignment(var.line, var.column,
-                              var, BinOp(var.line, var.column, var, "+", 1))
-        elif op == "--" :
-            return Assignment(var.line, var.column,
-                              var, BinOp(var.line, var.column, var, "-", 1))
-        elif op == "+" :
-            return Assignment(var.line, var.column, var, 1)
-        elif op == "-" :
-            return Assignment(var.line, var.column, var, 0)
-        elif op == "~" :
-            return Assignment(var.line, var.column,
-                              var, BinOp(var.line, var.column, 1, "-", var))
-        else :
-            _error(op.line, op.column, "invalid assignment {op.value!r}")
+        This is a table that counts for each variable how many time it is
+        read and how many times it is assigned.
 
-class MRRIndenter (Indenter) :
-    NL_type = "_NL"
-    OPEN_PAREN_types = []
-    CLOSE_PAREN_types = []
-    INDENT_type = "_INDENT"
-    DEDENT_type = "_DEDENT"
-    tab_len = 4
+        # Arguments
 
-def parse (text) :
-    parser = Lark_StandAlone(transformer=MRRTrans(), postlex=MRRIndenter())
-    return parser.parse(cpp(text))
+         - `constraints (bool=True)`: shall constraints be taken into account
+         - `variables (None)`: list of variables to include, or a function that
+           take a variable name and return a `bool`
+         - `plot (bool=True)`: if `True` add bars to the table to be displayed
+           in Jupyter, otherwise, just return the data
+
+        # Return
+
+         - a styled `pd.io.formats.style.Styler` if `plot=True`
+         - a raw `pd.DataFrame` if `plot=False`
+        """
+        if variables is None:
+            keepvar = lambda _: True
+        elif isinstance(variables, (set, list, tuple, dict)):
+            keepvar = set(variables).__contains__
+        elif callable(variables):
+            keepvar = variables
+        else:
+            raise TypeError(f"unexpected {variables=}")
+        count = dict()
+        index = {}
+        for path, loc in self.spec:
+            for var in loc.variables:
+                vname = ".".join(path + [var.name])
+                index[*path, var.name] = vname
+                if keepvar(vname):
+                    count.setdefault(("left", vname), 0)
+                    count.setdefault(("right", vname), 0)
+            for act in loc.actions if constraints else loc.rules:
+                for side in ("left", "right"):
+                    for item in getattr(act, side):
+                        for pth, var in item.vars(path):
+                            vname = ".".join(pth + [var.name])
+                            if keepvar(vname):
+                                count.setdefault((side, vname), 0)
+                                count[side, vname] += 1
+        index = [val for _, val in sorted((len(k), v)
+                                          for k, v in index.items())]
+        df = pd.DataFrame(
+            [[count["left", var], count["right", var]] for var in index],
+            index=index,
+            columns=["left", "right"])
+        if plot:
+            return df.style.bar(width=80, height=60, color='#3fb63f')
+        else:
+            return df
+
+    def ecograph(self, constraints=True, **opt):
+        """Show the ecosystemic graph.
+
+        The nodes are the variables and an edge from one variable to another
+        means that the former has an influence onto the latter. there are two
+        possible reasons for a variable `x` to have an influence onto `y`:
+
+         - `x` appears in the left-hand side of an actions and `y` is assigned
+           in the right-hand sign, eg: `x+ >> y+`
+         - `y` is assigned with an expression involving `x`, but `x` is not
+           necessarily a condition of the action, eg: `... >> y=x+1`
+
+        # Arguments
+
+         - `constraints (bool=True)`: whether to take the constraints into
+           account
+         - `key=val, ...`: any option suitable for `cygraphs.Graph`
+
+        # Return
+
+        A `cygraph.Graph` instance that can be directly displayed in Jupyter.
+        """
+        nodes = []
+        edges = defaultdict(set)
+        for path, loc in self.spec:
+            for var in loc.variables:
+                # one declared variable => one node
+                vname = ".".join(path + [var.name])
+                vtype = ("bool"
+                         if var.isbool
+                         else f"{min(var.domain)}..{max(var.domain)}")
+                if var.init is None:
+                    vinit = -1
+                elif isinstance(var.init, set):
+                    vinit = sum(var.init) / len(var.init)
+                else:
+                    vinit = sum(-1 if i is None else sum(i) / len(i)
+                                for i in var.init) / len(var.init)
+                if vinit < 0:
+                    color = "#ffaaff"
+                else:
+                    color = Color("#ffaaaa")
+                    green = Color("#aaffaa")
+                    vmax = max(var.domain)
+                    color.hue = (color.hue * vinit
+                                 + green.hue * (vmax - vinit)) / vmax
+                    color = color.get_hex_l()
+                nodes.append({"node": vname,
+                              "location": ".".join(path),
+                              "size": var.size or 0,
+                              "color": color,
+                              "type": vtype,
+                              "clock": var.clock or ""})
+            for act in loc.actions if constraints else loc.rules:
+                left, right = set(), set()
+                for con in act.left:
+                    # explicit conditions
+                    for p, v in con.vars(path):
+                        left.add(".".join(p + [v.name]))
+                for ass in act.right:
+                    for p, v in ass.target.vars(path):
+                        # assigned variable
+                        right.add(".".join(p + [v.name]))
+                    for p, v in getattr(ass.value, "vars", lambda _: [])(path):
+                        # variable also read but possibly not as conditions
+                        left.add(".".join(p + [v.name]))
+                for lft, rgt in product(left, right):
+                    if lft != rgt:
+                        edges[lft, rgt].add(act.name)
+        nodes = pd.DataFrame.from_records(nodes, index=["node"])
+        edges = pd.DataFrame.from_records([{"src": s,
+                                            "dst": d,
+                                            "actions": hset(v)}
+                                           for (s, d), v in edges.items()])
+        opts = dict(layout="circle",
+                    nodes_fill_color="color",
+                    nodes_fill_palette="red-green/white",
+                    nodes_shape="ellipse",
+                    edges_label="",
+                    edges_curve="straight")
+        opts.update(opt)
+        return Graph(nodes, edges, **opts)
+
+    def ecohyper(self, constraints=True, **opt):
+        """Show the ecosystemic hypergraph.
+
+        This is an evolution of the ecosystemic graph that is more detailed and
+        precise. For each action, its has a square node that is linked to all
+        the variables (round nodes) it involves. This link can be:
+
+         - unlabelled and indirected if the variable only read by the action
+         - directed towards the variable if it is assigned by the actions, in
+           which case the edge is labelled by the assigned expression
+
+        Arguments:
+         - `constraints (bool=True)`: whether to take the constraints into
+           account
+         - `key=val, ...`: any option suitable for `cygraphs.Graph`
+
+        Return: a `cygraph.Graph` instance that can be directly displayed
+        in Jupyter
+        """
+        nodes = []
+        edges = []
+        for path, loc in self.spec:
+            for var in loc.variables:
+                # each declared variable is a node
+                vname = ".".join(path + [var.name])
+                if var.init is None:
+                    vinit = -1
+                elif isinstance(var.init, set):
+                    vinit = sum(var.init) / len(var.init)
+                else:
+                    vinit = sum(-1 if i is None else sum(i) / len(i)
+                                for i in var.init) / len(var.init)
+                if vinit < 0:
+                    color = "#ffaaff"
+                else:
+                    color = Color("#ffaaaa")
+                    green = Color("#aaffaa")
+                    vmax = max(var.domain)
+                    color.hue = (color.hue * (vmax - vinit)
+                                 + green.hue * vinit) / vmax
+                    color = color.get_hex_l()
+                nodes.append({"node": vname,
+                              "location": ".".join(path),
+                              "kind": "variable",
+                              "info": str(var),
+                              "shape": "ellipse",
+                              "color": color})
+            for kind in ("constraint", "rule"):
+                if not constraints and kind == "constraint":
+                    continue
+                for act in getattr(loc, f"{kind}s"):
+                    # each action is a node
+                    nodes.append({"node": act.name,
+                                  "location": ".".join(path),
+                                  "kind": kind,
+                                  "info": str(act),
+                                  "shape": "rectangle",
+                                  "color": ("#aaaaff" if kind == "rule"
+                                            else "#ffffaa")})
+                    left, right, assign = set(), set(), {}
+                    for con in act.left:
+                        # read variables
+                        for p, v in con.vars(path):
+                            left.add(".".join(p + [v.name]))
+                    for ass in act.right:
+                        for p, v in ass.target.vars(path):
+                            # assigned variable (only one actually)
+                            tgt = ".".join(p + [v.name])
+                            right.add(tgt)
+                            assign[tgt] = str(ass.value)
+                        for p, v in getattr(ass.value, "vars",
+                                            lambda _: [])(path):
+                            # also read variables, skip if has no method vars
+                            left.add(".".join(p + [v.name]))
+                    for v in left - right:
+                        # readonly => empty arrowless arc
+                        edges.append({"src": v,
+                                      "dst": act.name,
+                                      "lbl": "",
+                                      "get": "-",
+                                      "set": "-"})
+                    for v in right:
+                        # written => arrowed arc labelled with assigned value
+                        edges.append({"src": v,
+                                      "dst": act.name,
+                                      "lbl": assign[v],
+                                      "get": ">",
+                                      "set": "-"})
+        opts = dict(nodes_shape="shape",
+                    nodes_fill_color="color",
+                    edges_label="lbl",
+                    edges_source_tip="get",
+                    edges_target_tip="set",
+                    inspect_nodes=["kind", "location", "info"],
+                    inspect_edges=[])
+        opts.update(opt)
+        nodes = pd.DataFrame.from_records(nodes, index=["node"])
+        edges = pd.DataFrame.from_records(edges, index=["src", "dst"])
+        return Graph(nodes, edges, **opts)
+
+    def __call__(self, *split, _init=None, **aliased) -> ComponentGraph:
+        """Build a `cg.ComponentGraph` from the model.
+
+        # Aguments
+
+         - `_init (None)`: initial state given as a `dict` mapping variable
+           names to sets of initial values
+         - `split, ...`: arguments suitable to `ComponentGraph.split()` in
+           order to perform an initial split (if none is given, the graph will
+           have just one component with all the reachable states)
+         - `alias=prop, ...`: other arguments for `ComponentGraph.split()`
+
+        # Return
+
+        A `cg.ComponentGraph` instance, possibly split as specified.
+        """
+        cg = ComponentGraph.from_model(self, _init)
+        if split or aliased:
+            return cg.split(*split, **aliased)
+        else:
+            return cg
+
+    def gal(self):
+        """Export the model as a GAL specification.
+
+        The specification is saved in a file called `basename/basename.gal`
+        where `basename.mrr` is the file from which the MRR model was loaded.
+        The GAL specification is defined with a unique initial state that is
+        chosen using the smallest of initial value of each variable.
+
+        Return: a pair `init, doms` where
+         - `init` is a `dict` suitable to initialise a `cg.ComponentGraph` that
+           gathers all the initial states as specified in the MRR model (and
+           not just that savec in the GAL)
+         - `doms` is a `dict` that maps every variable to its domain
+        """
+        init, doms, clocks = {}, {}, {}
+        gnames = self.spec.gal = {}
+        name = re.sub("[^a-z0-9]+", "", self.base.name, flags=re.I)
+        with self["gal"].open("w") as out:
+            out.write(f"gal {name} {{\n")
+            self._gal_vars(out, self.spec, [], init, doms, clocks, gnames)
+            guard = set()
+            self._gal_actions(out, self.spec, [], "constraints",
+                              guard, None, gnames)
+            if guard:
+                guard = " || ".join(f"({g})" for g in sorted(guard))
+            else:
+                guard = None
+            self._gal_actions(out, self.spec, [], "rules",
+                              guard, None, gnames)
+            self._gal_clocks(out, clocks, guard, gnames)
+            out.write("}\n")
+        return init, doms, gnames
+
+    def _gal_vars(self, out, loc, path, init, domains, clocks, gnames):
+        "Auxiliary methd that exports variables to GAL."
+        head = ".".join(path) + ("." if path else "")
+        for var in loc.variables:
+            if var.isbool:
+                vtype = "bool"
+            elif var.clock is not None:
+                vtype = "clock"
+                clocks.setdefault(var.clock, {})
+            else:
+                vtype = "int"
+            if var.size is None:
+                vname = f"{vtype}_{head}{var.name}"
+                if var.init is None:
+                    out.write(f"  int {vname} = -1;\n")
+                    init[vname] = {-1}
+                else:
+                    out.write(f"  int {vname} = {min(var.init)};\n")
+                    init[vname] = var.init
+                domains[vname] = var.domain | {-1}
+                gnames[vname] = var
+                if var.clock:
+                    clocks[var.clock][vname] = var
+            else:
+                for idx in range(var.size):
+                    vname = f"{vtype}_{head}{var.name}.{idx}"
+                    if var.init[idx] is None:
+                        init[vname] = {-1}
+                        out.write(f"  int {vname} = -1;\n")
+                    else:
+                        init[vname] = var.init[idx]
+                        out.write(f"  int {vname} = {min(var.init[idx])};\n")
+                    domains[vname] = var.domain
+                    gnames[vname] = var
+                    if var.clock:
+                        clocks[var.clock][vname] = var
+        for sub in loc.locations:
+            if sub.size is None:
+                self._gal_vars(out, sub,
+                               path + [f"{sub.name}"],
+                               init, domains, clocks, gnames)
+            else:
+                for idx in range(sub.size):
+                    self._gal_vars(out, sub,
+                                   path + [f"{sub.name}.{idx}"],
+                                   init, domains, clocks, gnames)
+
+    def _gal_actions(self, out, loc, path, kind, guard, locidx, gnames):
+        "Auxiliary method that exports actions to GAL."
+        head = ".".join(path) + ("." if path else "")
+        for num, act in enumerate(getattr(loc, kind), start=1):
+            name = f"{head}{kind[0].upper()}{num}"
+            self._gal_act(out, act, name, guard, path, locidx, gnames)
+        for sub in loc.locations:
+            if sub.size is None:
+                self._gal_actions(out, sub,
+                                  path + [f"{sub.name}"],
+                                  kind, guard, locidx, gnames)
+            else:
+                for idx in range(sub.size):
+                    self._gal_actions(out, sub,
+                                      path + [f"{sub.name}.{idx}"],
+                                      kind, guard, idx, gnames)
+
+    def _gal_act(self, out, act, name, guard, path, locidx, gnames):
+        "Auxiliary method that exports one action to GAL"
+        if locidx is None:
+            binding = {}
+        else:
+            binding = {"self": locidx}
+        out.write(f"  // {act}\n")
+        for new, val in act.expand_any(binding):
+            if val:
+                tail = "._." + ".".join(f"{k}.{v}"
+                                        for k, v in sorted(val.items()))
+            else:
+                tail = ""
+            gnames[f"{name}{tail}"] = new
+            cond = " && ".join(sorted(f"({b.gal(path)})" for b in new.left))
+            loop = " && ".join(sorted(f"({a.cond().gal(path)})"
+                                      for a in new.right))
+            condloop = f"{cond} && !({loop})"
+            if isinstance(guard, set):
+                guard.add(condloop)
+                out.write(f"  transition {name}{tail} [{condloop}] {{\n")
+            elif guard is None:
+                out.write(f"  transition {name}{tail} [{condloop}] {{\n")
+            else:
+                out.write(f"  transition {name}{tail} [{condloop}"
+                          f" && !({guard})] {{\n")
+            out.write(f"    // {new}\n")
+            for right in new.right:
+                out.write("    " + "\n    ".join(right.gal(path)) + "\n")
+            out.write("  }\n")
+
+    def _gal_clocks(self, out, clocks, guard, gnames):
+        "Auxiliary method that generates clock ticks into GAL."
+        for clock, variables in clocks.items():
+            gnames[f"tick.{clock}"] = (clock, variables)
+            skip = " && ".join(f"({name} == -1)" for name in variables)
+            cond = " && ".join(f"({name} < {max(var.domain)})"
+                               for name, var in variables.items())
+            if guard is None:
+                out.write(f"  transition tick.{clock}"
+                          f" [!({skip}) && {cond}] {{\n")
+            else:
+                out.write(f"  transition tick.{clock}"
+                          f" [!({skip}) && {cond} && !({guard})] {{\n")
+            for name in variables:
+                out.write(f"    if ({name} >= 0) {{ {name} += 1; }}\n")
+            out.write("  }\n")
+
+
+__extra__ = {"topo": topo,
+             "setrel": setrel}
+
+__extra__.update({val.name: val
+                  for cls in (topo, setrel)
+                  for val in cls})

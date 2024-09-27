@@ -7,3 +7,5 @@ snapshot.py
 .ipynb_checkpoints
 doc/termites/
 pyrightconfig.json
+.envrc
+/.venv

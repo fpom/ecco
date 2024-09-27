@@ -6,7 +6,7 @@ from distutils.extension import Extension
 
 import ecco
 
-VERSION = '0.6'
+VERSION = '0.7'
 long_description = pathlib.Path("README.md").read_text(encoding="utf-8")
 description = inspect.cleandoc(ecco.__doc__).splitlines()[0]
 
@@ -25,7 +25,8 @@ setup(name="ecco",
                    "Operating System :: OS Independent"],
       packages=find_packages(where="."),
       python_requires=">=3.7",
-      ext_modules = cythonize([Extension("ecco._ui", ["ecco/_ui.pyx"]),
-                               Extension("ecco.rr.lts", ["ecco/rr/lts.pyx"])],
-                              language_level=3),
-)
+      ext_modules=cythonize([Extension("ecco._ui", ["ecco/_ui.pyx"]),
+                             Extension("ecco.lrr.lts", ["ecco/lrr/lts.pyx"]),
+                             Extension("ecco.mrr.lts", ["ecco/mrr/lts.pyx"])],
+                            language_level=3),
+      )

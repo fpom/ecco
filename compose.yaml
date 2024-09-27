@@ -1,0 +1,7 @@
+services:
+  ecco:
+    image: franckpommereau/ecco:latest
+    ports:
+      - 12345:8000
+    volumes:
+      - /etc:/etc
