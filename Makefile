@@ -1,10 +1,10 @@
 VERSION=$$(git tag|tail -n1)
 
 remote:
-	docker run -p 8000:8000 franckpommereau/ecco jupyterhub
+	docker run -p 8000:8000 franckpommereau/ecco bash --login -c "jupyter-lab --no-browser --ip=0.0.0.0 --port=8000"
 
 local:
-	docker run -p 8000:8000 ecco jupyterhub
+	docker run -p 8000:8000 -u ecco -w /home/ecco ecco bash --login -c "jupyter-lab --no-browser --ip=0.0.0.0 --port=8000"
 
 build:
 	docker build -t ecco .

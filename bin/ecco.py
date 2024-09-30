@@ -1,102 +1,182 @@
 #!/usr/bin/env python3
 
-import argparse, subprocess, shlex, re, webbrowser, sys, multiprocessing, os, signal
+import argparse
+import multiprocessing
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import webbrowser
+
 from pathlib import Path
 
-parser = argparse.ArgumentParser(prog="ecco",
-                                 description="Start ecco from Docker image.")
-parser.add_argument("-t", "--tag", type=str, default="latest",
-                    help="run specific version (e.g. '0.4', default: 'latest')")
-parser.add_argument("-l", "--local", default="franckpommereau/",
-                    action="store_const", const="", dest="repo",
-                    help="run from local Docker repository")
-parser.add_argument("-p", "--port", default=8000, type=int,
-                    help="run jupyter on specific port (default: 8000)")
-parser.add_argument("-n", "--no-browse",
-                    dest="browse", default=True, action="store_false",
-                    help="do not launch web brower")
-parser.add_argument("-d", "--debug", default=False, action="store_true",
-                    help="print Docker output and debugging messages")
-parser.add_argument("-u", "--user", default="ecco", type=str,
-                    help="run command as USER (default: 'ecco')")
-parser.add_argument("-g", "--gui", default=False, action="store_true",
-                    help="start Desktop integration GUI")
-parser.add_argument("-c", "--chdir", default="/home/ecco", type=str, metavar="DIR",
-                    help="set working directory to DIR (default: '/home/ecco')")
-parser.add_argument("-m", "--mount", metavar="DIR", default=[],
-                    type=str, action="append",
-                    help="mount local directory DIR into the Docker container")
-parser.add_argument("cmd", default=["jupyter-notebook", "--no-browser",
-                                    "--port=8000", "--ip=0.0.0.0"],
-                    type=str, nargs="*",
-                    help="start a specific command (default: jupyter-notebook)")
+parser = argparse.ArgumentParser(
+    prog="ecco", description="Start ecco from Docker image."
+)
+parser.add_argument(
+    "-t",
+    "--tag",
+    type=str,
+    default="latest",
+    help="run specific version (e.g. '0.4', default: 'latest')",
+)
+parser.add_argument(
+    "-l",
+    "--local",
+    default="franckpommereau/",
+    action="store_const",
+    const="",
+    dest="repo",
+    help="run from local Docker repository",
+)
+parser.add_argument(
+    "-p",
+    "--port",
+    default=8000,
+    type=int,
+    help="run jupyter on specific port (default: 8000)",
+)
+parser.add_argument(
+    "-n",
+    "--no-browse",
+    dest="browse",
+    default=True,
+    action="store_false",
+    help="do not launch web brower",
+)
+parser.add_argument(
+    "-d",
+    "--debug",
+    default=False,
+    action="store_true",
+    help="print Docker output and debugging messages",
+)
+parser.add_argument(
+    "-u",
+    "--user",
+    default="ecco",
+    type=str,
+    help="run command as USER (default: 'ecco')",
+)
+parser.add_argument(
+    "-g",
+    "--gui",
+    default=False,
+    action="store_true",
+    help="start Desktop integration GUI",
+)
+parser.add_argument(
+    "-c",
+    "--chdir",
+    default="/home/ecco",
+    type=str,
+    metavar="DIR",
+    help="set working directory to DIR (default: '/home/ecco')",
+)
+parser.add_argument(
+    "-m",
+    "--mount",
+    metavar="DIR",
+    default=[],
+    type=str,
+    action="append",
+    help="mount local directory DIR into the Docker container",
+)
+parser.add_argument(
+    "cmd",
+    default=["jupyter-lab", "--no-browser", "--port=8000", "--ip=0.0.0.0"],
+    type=str,
+    nargs="*",
+    help="start a specific command (default: jupyter-lab)",
+)
 
 args = parser.parse_args()
 
-class Debug (object) :
-    def __init__ (self) :
+
+class Debug(object):
+    def __init__(self):
         self.debug = args.debug
-        try :
+        try:
             import colorama
-            self.c = {"docker" : colorama.Fore.LIGHTBLACK_EX,
-                      "info" : colorama.Fore.BLUE,
-                      "warn" : colorama.Fore.RED,
-                      "error" : colorama.Fore.RED + colorama.Style.BRIGHT,
-                      "log" : colorama.Style.BRIGHT,
-                      None : colorama.Style.RESET_ALL}
-        except :
-            self.c = {"docker" : "",
-                      "info" : "",
-                      "warn" : "",
-                      "error" : "",
-                      "log" : "",
-                      None : ""}
-    def __getitem__ (self, key) :
+
+            self.c = {
+                "docker": colorama.Fore.LIGHTBLACK_EX,
+                "info": colorama.Fore.BLUE,
+                "warn": colorama.Fore.RED,
+                "error": colorama.Fore.RED + colorama.Style.BRIGHT,
+                "log": colorama.Style.BRIGHT,
+                None: colorama.Style.RESET_ALL,
+            }
+        except ImportError:
+            self.c = {
+                "docker": "",
+                "info": "",
+                "warn": "",
+                "error": "",
+                "log": "",
+                None: "",
+            }
+
+    def __getitem__(self, key):
         return self.c.get(key, "")
-    def __call__ (self, *args, kind="docker") :
-        if self.debug :
+
+    def __call__(self, *args, kind="docker"):
+        if self.debug:
             print(f"{self[kind]}{' '.join(str(a) for a in args)}{self[None]}")
-    def log (self, *args, kind="log") :
+
+    def log(self, *args, kind="log"):
         print(f"{self[kind]}{' '.join(str(a) for a in args)}{self[None]}")
+
 
 debug = Debug()
 
-argv = ["docker", "run",
-        "-p", f"{args.port}:8000",
-        "-u", args.user,
-        "-w", args.chdir]
+argv = [
+    "docker",
+    "run",
+    "-p",
+    f"{args.port}:8000",
+    "-u",
+    args.user,
+    "-w",
+    args.chdir,
+]
 
 mount = set()
-for mnt in args.mount :
+for mnt in args.mount:
     src = Path(mnt).resolve()
     home = Path("/home/ecco")
     dstparts = []
-    for part in reversed(src.parts[1:]) :
+    for part in reversed(src.parts[1:]):
         dstparts.insert(0, part)
         dstname = "-".join(dstparts)
-        if dstname not in mount :
+        if dstname not in mount:
             dst = home / dstname
             mount.add(dstname)
-            if str(src) == mnt :
+            if str(src) == mnt:
                 debug.log("mount:", src, "=>", dst)
-            else :
+            else:
                 debug.log("mount:", mnt, "=>", src, "=>", dst)
             break
-    else :
+    else:
         debug.log(f"could not build a mountpoint for {mnt}", kind="error")
         sys.exit(1)
     argv.append("--mount")
     argv.append(f"type=bind,source={src},destination={dst}")
 
-argv.append(f"{args.repo}ecco:{args.tag}")
-argv.extend(args.cmd)
+argv.extend(
+    [f"{args.repo}ecco:{args.tag}", "bash", "--login", "-c", shlex.join(args.cmd)]
+)
 
-_url = re.compile(f"http://127.0.0.1:8000/\S*")
+_url = re.compile(r"http://127.0.0.1:8000/\S*")
 url = None
 
-def gui (pid, url) :
+
+def gui(pid, url):
     from PySide2.QtGui import QIcon, QPixmap
-    from PySide2.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
+    from PySide2.QtWidgets import QAction, QApplication, QMenu, QSystemTrayIcon
+
     xpm = b"""/* XPM */
 static char * ecco_xpm[] = {
 "64 54 188 2",
@@ -345,14 +425,18 @@ static char * ecco_xpm[] = {
 """
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
-    def browse () :
+
+    def browse():
         webbrowser.open(url)
+
     menu = QMenu()
     action = QAction("Open in browser")
     action.triggered.connect(browse)
-    def stop () :
+
+    def stop():
         os.kill(pid, signal.SIGINT)
         app.quit()
+
     menu.addAction(action)
     quit = QAction("Quit")
     quit.triggered.connect(stop)
@@ -367,30 +451,33 @@ static char * ecco_xpm[] = {
     tray.setContextMenu(menu)
     app.exec_()
 
-try :
+
+try:
     debug.log("starting Docker")
-    debug("running:", " ".join(argv), kind="info")
-    sub = subprocess.Popen(argv,
-                           stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT,
-                           encoding="utf-8",
-                           errors="replace")
-    for line in sub.stdout :
+    debug("running:", shlex.join(argv), kind="info")
+    sub = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding="utf-8",
+        errors="replace",
+    )
+    for line in sub.stdout:
         debug(line.strip())
-        if url is None :
+        if url is None:
             match = _url.search(line)
-            if match :
+            if match:
                 url = match.group()
                 debug.log("jupyter-notebook is at:", url)
-                if args.gui :
-                    proc = multiprocessing.Process(target=gui,
-                                                   args=(os.getpid(), url),
-                                                   daemon=False)
+                if args.gui:
+                    proc = multiprocessing.Process(
+                        target=gui, args=(os.getpid(), url), daemon=False
+                    )
                     proc.start()
-                if args.browse :
+                if args.browse:
                     debug("starting browser...", kind="info")
                     webbrowser.open(url)
                     args.browse = False
-except KeyboardInterrupt :
+except KeyboardInterrupt:
     debug.log("terminating...")
     sub.terminate()
