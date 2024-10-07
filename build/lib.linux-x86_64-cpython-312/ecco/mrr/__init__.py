@@ -80,14 +80,17 @@ class Model(BaseModel):
                             if keepvar(vname):
                                 count.setdefault((side, vname), 0)
                                 count[side, vname] += 1
-        index = [val for _, val in sorted((len(k), v)
-                                          for k, v in index.items())]
+        index = [val for _, val in sorted((len(k), v) for k, v in index.items())]
         df = pd.DataFrame(
-            [[count["left", var], count["right", var]] for var in index],
+            [
+                [count.get(("left", var), 0), count.get(("right", var), 0)]
+                for var in index
+            ],
             index=index,
-            columns=["left", "right"])
+            columns=["left", "right"],
+        )
         if plot:
-            return df.style.bar(width=80, height=60, color='#3fb63f')
+            return df.style.bar(width=80, height=60, color="#3fb63f")
         else:
             return df
 
@@ -119,31 +122,35 @@ class Model(BaseModel):
             for var in loc.variables:
                 # one declared variable => one node
                 vname = ".".join(path + [var.name])
-                vtype = ("bool"
-                         if var.isbool
-                         else f"{min(var.domain)}..{max(var.domain)}")
+                vtype = (
+                    "bool" if var.isbool else f"{min(var.domain)}..{max(var.domain)}"
+                )
                 if var.init is None:
                     vinit = -1
                 elif isinstance(var.init, set):
                     vinit = sum(var.init) / len(var.init)
                 else:
-                    vinit = sum(-1 if i is None else sum(i) / len(i)
-                                for i in var.init) / len(var.init)
+                    vinit = sum(
+                        -1 if i is None else sum(i) / len(i) for i in var.init
+                    ) / len(var.init)
                 if vinit < 0:
                     color = "#ffaaff"
                 else:
                     color = Color("#ffaaaa")
                     green = Color("#aaffaa")
                     vmax = max(var.domain)
-                    color.hue = (color.hue * vinit
-                                 + green.hue * (vmax - vinit)) / vmax
+                    color.hue = (color.hue * vinit + green.hue * (vmax - vinit)) / vmax
                     color = color.get_hex_l()
-                nodes.append({"node": vname,
-                              "location": ".".join(path),
-                              "size": var.size or 0,
-                              "color": color,
-                              "type": vtype,
-                              "clock": var.clock or ""})
+                nodes.append(
+                    {
+                        "node": vname,
+                        "location": ".".join(path),
+                        "size": var.size or 0,
+                        "color": color,
+                        "type": vtype,
+                        "clock": var.clock or "",
+                    }
+                )
             for act in loc.actions if constraints else loc.rules:
                 left, right = set(), set()
                 for con in act.left:
@@ -161,16 +168,17 @@ class Model(BaseModel):
                     if lft != rgt:
                         edges[lft, rgt].add(act.name)
         nodes = pd.DataFrame.from_records(nodes, index=["node"])
-        edges = pd.DataFrame.from_records([{"src": s,
-                                            "dst": d,
-                                            "actions": hset(v)}
-                                           for (s, d), v in edges.items()])
-        opts = dict(layout="circle",
-                    nodes_fill_color="color",
-                    nodes_fill_palette="red-green/white",
-                    nodes_shape="ellipse",
-                    edges_label="",
-                    edges_curve="straight")
+        edges = pd.DataFrame.from_records(
+            [{"src": s, "dst": d, "actions": hset(v)} for (s, d), v in edges.items()]
+        )
+        opts = dict(
+            layout="circle",
+            nodes_fill_color="color",
+            nodes_fill_palette="red-green/white",
+            nodes_shape="ellipse",
+            edges_label="",
+            edges_curve="straight",
+        )
         opts.update(opt)
         return Graph(nodes, edges, **opts)
 
@@ -204,35 +212,42 @@ class Model(BaseModel):
                 elif isinstance(var.init, set):
                     vinit = sum(var.init) / len(var.init)
                 else:
-                    vinit = sum(-1 if i is None else sum(i) / len(i)
-                                for i in var.init) / len(var.init)
+                    vinit = sum(
+                        -1 if i is None else sum(i) / len(i) for i in var.init
+                    ) / len(var.init)
                 if vinit < 0:
                     color = "#ffaaff"
                 else:
                     color = Color("#ffaaaa")
                     green = Color("#aaffaa")
                     vmax = max(var.domain)
-                    color.hue = (color.hue * (vmax - vinit)
-                                 + green.hue * vinit) / vmax
+                    color.hue = (color.hue * (vmax - vinit) + green.hue * vinit) / vmax
                     color = color.get_hex_l()
-                nodes.append({"node": vname,
-                              "location": ".".join(path),
-                              "kind": "variable",
-                              "info": str(var),
-                              "shape": "ellipse",
-                              "color": color})
+                nodes.append(
+                    {
+                        "node": vname,
+                        "location": ".".join(path),
+                        "kind": "variable",
+                        "info": str(var),
+                        "shape": "ellipse",
+                        "color": color,
+                    }
+                )
             for kind in ("constraint", "rule"):
                 if not constraints and kind == "constraint":
                     continue
                 for act in getattr(loc, f"{kind}s"):
                     # each action is a node
-                    nodes.append({"node": act.name,
-                                  "location": ".".join(path),
-                                  "kind": kind,
-                                  "info": str(act),
-                                  "shape": "rectangle",
-                                  "color": ("#aaaaff" if kind == "rule"
-                                            else "#ffffaa")})
+                    nodes.append(
+                        {
+                            "node": act.name,
+                            "location": ".".join(path),
+                            "kind": kind,
+                            "info": str(act),
+                            "shape": "rectangle",
+                            "color": ("#aaaaff" if kind == "rule" else "#ffffaa"),
+                        }
+                    )
                     left, right, assign = set(), set(), {}
                     for con in act.left:
                         # read variables
@@ -244,31 +259,40 @@ class Model(BaseModel):
                             tgt = ".".join(p + [v.name])
                             right.add(tgt)
                             assign[tgt] = str(ass.value)
-                        for p, v in getattr(ass.value, "vars",
-                                            lambda _: [])(path):
+                        for p, v in getattr(ass.value, "vars", lambda _: [])(path):
                             # also read variables, skip if has no method vars
                             left.add(".".join(p + [v.name]))
                     for v in left - right:
                         # readonly => empty arrowless arc
-                        edges.append({"src": v,
-                                      "dst": act.name,
-                                      "lbl": "",
-                                      "get": "-",
-                                      "set": "-"})
+                        edges.append(
+                            {
+                                "src": v,
+                                "dst": act.name,
+                                "lbl": "",
+                                "get": "-",
+                                "set": "-",
+                            }
+                        )
                     for v in right:
                         # written => arrowed arc labelled with assigned value
-                        edges.append({"src": v,
-                                      "dst": act.name,
-                                      "lbl": assign[v],
-                                      "get": ">",
-                                      "set": "-"})
-        opts = dict(nodes_shape="shape",
-                    nodes_fill_color="color",
-                    edges_label="lbl",
-                    edges_source_tip="get",
-                    edges_target_tip="set",
-                    inspect_nodes=["kind", "location", "info"],
-                    inspect_edges=[])
+                        edges.append(
+                            {
+                                "src": v,
+                                "dst": act.name,
+                                "lbl": assign[v],
+                                "get": ">",
+                                "set": "-",
+                            }
+                        )
+        opts = dict(
+            nodes_shape="shape",
+            nodes_fill_color="color",
+            edges_label="lbl",
+            edges_source_tip="get",
+            edges_target_tip="set",
+            inspect_nodes=["kind", "location", "info"],
+            inspect_edges=[],
+        )
         opts.update(opt)
         nodes = pd.DataFrame.from_records(nodes, index=["node"])
         edges = pd.DataFrame.from_records(edges, index=["src", "dst"])
@@ -317,14 +341,12 @@ class Model(BaseModel):
             out.write(f"gal {name} {{\n")
             self._gal_vars(out, self.spec, [], init, doms, clocks, gnames)
             guard = set()
-            self._gal_actions(out, self.spec, [], "constraints",
-                              guard, None, gnames)
+            self._gal_actions(out, self.spec, [], "constraints", guard, None, gnames)
             if guard:
                 guard = " || ".join(f"({g})" for g in sorted(guard))
             else:
                 guard = None
-            self._gal_actions(out, self.spec, [], "rules",
-                              guard, None, gnames)
+            self._gal_actions(out, self.spec, [], "rules", guard, None, gnames)
             self._gal_clocks(out, clocks, guard, gnames)
             out.write("}\n")
         return init, doms, gnames
@@ -367,14 +389,20 @@ class Model(BaseModel):
                         clocks[var.clock][vname] = var
         for sub in loc.locations:
             if sub.size is None:
-                self._gal_vars(out, sub,
-                               path + [f"{sub.name}"],
-                               init, domains, clocks, gnames)
+                self._gal_vars(
+                    out, sub, path + [f"{sub.name}"], init, domains, clocks, gnames
+                )
             else:
                 for idx in range(sub.size):
-                    self._gal_vars(out, sub,
-                                   path + [f"{sub.name}.{idx}"],
-                                   init, domains, clocks, gnames)
+                    self._gal_vars(
+                        out,
+                        sub,
+                        path + [f"{sub.name}.{idx}"],
+                        init,
+                        domains,
+                        clocks,
+                        gnames,
+                    )
 
     def _gal_actions(self, out, loc, path, kind, guard, locidx, gnames):
         "Auxiliary method that exports actions to GAL."
@@ -384,14 +412,14 @@ class Model(BaseModel):
             self._gal_act(out, act, name, guard, path, locidx, gnames)
         for sub in loc.locations:
             if sub.size is None:
-                self._gal_actions(out, sub,
-                                  path + [f"{sub.name}"],
-                                  kind, guard, locidx, gnames)
+                self._gal_actions(
+                    out, sub, path + [f"{sub.name}"], kind, guard, locidx, gnames
+                )
             else:
                 for idx in range(sub.size):
-                    self._gal_actions(out, sub,
-                                      path + [f"{sub.name}.{idx}"],
-                                      kind, guard, idx, gnames)
+                    self._gal_actions(
+                        out, sub, path + [f"{sub.name}.{idx}"], kind, guard, idx, gnames
+                    )
 
     def _gal_act(self, out, act, name, guard, path, locidx, gnames):
         "Auxiliary method that exports one action to GAL"
@@ -402,14 +430,12 @@ class Model(BaseModel):
         out.write(f"  // {act}\n")
         for new, val in act.expand_any(binding):
             if val:
-                tail = "._." + ".".join(f"{k}.{v}"
-                                        for k, v in sorted(val.items()))
+                tail = "._." + ".".join(f"{k}.{v}" for k, v in sorted(val.items()))
             else:
                 tail = ""
             gnames[f"{name}{tail}"] = new
             cond = " && ".join(sorted(f"({b.gal(path)})" for b in new.left))
-            loop = " && ".join(sorted(f"({a.cond().gal(path)})"
-                                      for a in new.right))
+            loop = " && ".join(sorted(f"({a.cond().gal(path)})" for a in new.right))
             condloop = f"{cond} && !({loop})"
             if isinstance(guard, set):
                 guard.add(condloop)
@@ -417,8 +443,9 @@ class Model(BaseModel):
             elif guard is None:
                 out.write(f"  transition {name}{tail} [{condloop}] {{\n")
             else:
-                out.write(f"  transition {name}{tail} [{condloop}"
-                          f" && !({guard})] {{\n")
+                out.write(
+                    f"  transition {name}{tail} [{condloop}" f" && !({guard})] {{\n"
+                )
             out.write(f"    // {new}\n")
             for right in new.right:
                 out.write("    " + "\n    ".join(right.gal(path)) + "\n")
@@ -429,22 +456,21 @@ class Model(BaseModel):
         for clock, variables in clocks.items():
             gnames[f"tick.{clock}"] = (clock, variables)
             skip = " && ".join(f"({name} == -1)" for name in variables)
-            cond = " && ".join(f"({name} < {max(var.domain)})"
-                               for name, var in variables.items())
+            cond = " && ".join(
+                f"({name} < {max(var.domain)})" for name, var in variables.items()
+            )
             if guard is None:
-                out.write(f"  transition tick.{clock}"
-                          f" [!({skip}) && {cond}] {{\n")
+                out.write(f"  transition tick.{clock}" f" [!({skip}) && {cond}] {{\n")
             else:
-                out.write(f"  transition tick.{clock}"
-                          f" [!({skip}) && {cond} && !({guard})] {{\n")
+                out.write(
+                    f"  transition tick.{clock}"
+                    f" [!({skip}) && {cond} && !({guard})] {{\n"
+                )
             for name in variables:
                 out.write(f"    if ({name} >= 0) {{ {name} += 1; }}\n")
             out.write("  }\n")
 
 
-__extra__ = {"topo": topo,
-             "setrel": setrel}
+__extra__ = {"topo": topo, "setrel": setrel}
 
-__extra__.update({val.name: val
-                  for cls in (topo, setrel)
-                  for val in cls})
+__extra__.update({val.name: val for cls in (topo, setrel) for val in cls})
