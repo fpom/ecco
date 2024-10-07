@@ -1,3 +1,5 @@
+- minor bugfix
+
 ## Version 0.7
 
 - added MRR language
