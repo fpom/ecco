@@ -1,4 +1,4 @@
-- minor bug fixed
+- minor bugs fixed
 
 ## Version 0.7
 
