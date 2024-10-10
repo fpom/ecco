@@ -370,10 +370,12 @@ class Model(BaseModel):
                 else:
                     out.write(f"  int {vname} = {min(var.init)};\n")
                     init[vname] = var.init
-                domains[vname] = var.domain | {-1}
                 gnames[vname] = var
                 if var.clock:
+                    domains[vname] = var.domain | {-1}
                     clocks[var.clock][vname] = var
+                else:
+                    domains[vname] = var.domain
             else:
                 for idx in range(var.size):
                     vname = f"{vtype}_{head}{var.name}.{idx}"

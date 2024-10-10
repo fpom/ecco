@@ -1,3 +1,4 @@
+- minor improvements
 - minor bugs fixed
 
 ## Version 0.7

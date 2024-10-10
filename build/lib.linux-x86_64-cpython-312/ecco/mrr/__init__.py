@@ -68,8 +68,8 @@ class Model(BaseModel):
         for path, loc in self.spec:
             for var in loc.variables:
                 vname = ".".join(path + [var.name])
-                index[*path, var.name] = vname
                 if keepvar(vname):
+                    index[*path, var.name] = vname
                     count.setdefault(("left", vname), 0)
                     count.setdefault(("right", vname), 0)
             for act in loc.actions if constraints else loc.rules:
