@@ -3,6 +3,7 @@ __pycache__
 snapshot.py
 .*.swp
 /ecco/_ui.c
+/build
 /.python-version
 .ipynb_checkpoints
 doc/termites/

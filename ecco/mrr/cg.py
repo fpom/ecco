@@ -21,14 +21,13 @@ from .ltsprop import AnyProp as ModelChecker
 from .tables import TableProxy, NodesTableProxy
 
 
-pd.set_option('display.max_colwidth', None)
+pd.set_option("display.max_colwidth", None)
 _re_digits = re.compile(r"(\d+)")
 
 
 def _human_sortkey(text):
     "key to sort strings in natural order"
-    return tuple(int(m) if m.isdigit() else m.lower()
-                 for m in _re_digits.split(text))
+    return tuple(int(m) if m.isdigit() else m.lower() for m in _re_digits.split(text))
 
 
 def _gal_sortkey(text):
@@ -45,6 +44,7 @@ def _gal_sortkey_0(seq):
 
 class _GCS(set):
     "a subclass of set that is tied to a component graph so it has __invert__"
+
     components = set()
 
     def __invert__(self):
@@ -77,6 +77,7 @@ class ComponentGraph:
      * `setrel` whose values are `HASNO`, `HAS`, `CONTAINS`, `ISIN`, and `EQUALS`
      * `topo` whose values are `INIT`, `ENTRY`, `EXIT`, `HULL`, `DEAD`, and `SCC`
     """
+
     def __init__(self, model, lts, *comps):
         """Create a new `ComponentGraph` on the top of a model and its LTS.
 
@@ -89,7 +90,7 @@ class ComponentGraph:
         self.lts = lts
         self.components = tuple(sorted(comps, key=attrgetter("num")))
         self._c = {c.num: c for c in comps}  # Component.num => Component
-        self._g = {}                          # Component.num => Vertex
+        self._g = {}  # Component.num => Vertex
 
     @classmethod
     def from_model(cls, model, init=None):
@@ -149,8 +150,7 @@ class ComponentGraph:
             t = index.sub(r"[\1]\2", t)
             if v:
                 s = v.split(".")
-                v = ",".join(f"{x}={n}"
-                             for x, n in sorted(zip(s[::2], s[1::2])))
+                v = ",".join(f"{x}={n}" for x, n in sorted(zip(s[::2], s[1::2])))
                 v = f"[{v}]"
             m = f"{t}{v}"
             g2m[g] = m
@@ -232,13 +232,11 @@ class ComponentGraph:
             return self.g.es[eid].attributes()
 
     def __iter__(self):
-        """Yield every `Component` in the `ComponentGraph`.
-        """
+        """Yield every `Component` in the `ComponentGraph`."""
         yield from self.components
 
     def __len__(self):
-        """Return the number of `Component`s in the `ComponentGraph`.
-        """
+        """Return the number of `Component`s in the `ComponentGraph`."""
         return len(self.components)
 
     def __eq__(self, other):
@@ -246,8 +244,9 @@ class ComponentGraph:
 
         They are equal if the contain exactly the same set of components.
         """
-        return isinstance(other, ComponentGraph) \
-            and set(self.components) == set(other.components)
+        return isinstance(other, ComponentGraph) and set(self.components) == set(
+            other.components
+        )
 
     #
     # attributes
@@ -267,25 +266,26 @@ class ComponentGraph:
         g2m = self.lts.g2m
         for i, c in enumerate(self.components):
             self._g[c.num] = g.add_vertex(node=c.num).index
-            for t, s in c.succ(*self.components[:i], *self.components[i+1:]):
+            for t, s in c.succ(*self.components[:i], *self.components[i + 1 :]):
                 edges[c.num, s.num].add(g2m[t])
         _g = self._g
         n2n = self.lts.n2n
         for (src, dst), actions in edges.items():
-            g.add_edge(_g[src], _g[dst], src=src, dst=dst,
-                       actions=hset(actions, key=n2n.get))
+            g.add_edge(
+                _g[src], _g[dst], src=src, dst=dst, actions=hset(actions, key=n2n.get)
+            )
         return g
 
     @cached_property
     def n(self):
         """A proxy to `.nodes` table.
 
-         - when printed, `.n` shows a summary of the content of `.nodes`
-         - so do printing `.n[col]` or `.n[[col, ...]]`
-         - deleting `.n[col]` or `.n[col, ...]` deletes columns in `.nodes`
-         - setting `.n[col] = fun`, where `fun` is a function that takes a row
-           as yield by `.nodes.iterrows()` and return a value, its
-           creates and populates a new column `col`
+        - when printed, `.n` shows a summary of the content of `.nodes`
+        - so do printing `.n[col]` or `.n[[col, ...]]`
+        - deleting `.n[col]` or `.n[col, ...]` deletes columns in `.nodes`
+        - setting `.n[col] = fun`, where `fun` is a function that takes a row
+          as yield by `.nodes.iterrows()` and return a value, its
+          creates and populates a new column `col`
         """
         return NodesTableProxy(self, self.nodes)
 
@@ -304,14 +304,16 @@ class ComponentGraph:
     def _make_nc_consts(self, row):
         "Compute the content of column `consts`."
         c = self._c[row.name]
-        return hset(self._v2s(k, v)
-                    for k, v in sorted(c.consts.items(), key=_gal_sortkey_0))
+        return hset(
+            self._v2s(k, v) for k, v in sorted(c.consts.items(), key=_gal_sortkey_0)
+        )
 
     def _make_ncols_setrel(self, row, rel):
         "Compute the content of column `rel`, depending on the value of `rel`."
         alias = self.lts.alias
-        return hset(alias.get(p, p) for p, r in self._c[row.name].props.items()
-                    if r == rel)
+        return hset(
+            alias.get(p, p) for p, r in self._c[row.name].props.items() if r == rel
+        )
 
     def _make_ncols(self, nodes, *cols):
         "Populate the columns `cols` of `nodes`."
@@ -357,11 +359,13 @@ class ComponentGraph:
         "Compute the columns `actions` of table `.edges`."
         gal = self.model.spec.gal
         m2g = self.lts.m2g
-        return hset(tag
-                    for act in actions
-                    for tag in (gal[m2g[act]][:1]
-                                if act.startswith("tick.")
-                                else gal[m2g[act]].tags))
+        return hset(
+            tag
+            for act in actions
+            for tag in (
+                gal[m2g[act]][:1] if act.startswith("tick.") else gal[m2g[act]].tags
+            )
+        )
 
     @cached_property
     def edges(self):
@@ -399,10 +403,16 @@ class ComponentGraph:
             self._make_ncols(nodes, *(r.name for r in setrel))
             nodes.sort_index(inplace=True)
 
-    def _get_args(self, args, aliased={},
-                  topo_props=False,
-                  min_props=0, max_props=None,
-                  min_comps=0, max_comps=None):
+    def _get_args(
+        self,
+        args,
+        aliased={},
+        topo_props=False,
+        min_props=0,
+        max_props=None,
+        min_comps=0,
+        max_comps=None,
+    ):
         """Collect the arguments for many methods.
 
         Most methods accept a series a component numbers followed by a series
@@ -441,17 +451,17 @@ class ComponentGraph:
             comps.extend(self.components)
         props.extend((v, k) for k, v in aliased.items())
         if (found := len(props)) < min_props:
-            raise TypeError(f"expected at least {min_props} properties,"
-                            f" got {found}")
+            raise TypeError(
+                f"expected at least {min_props} properties," f" got {found}"
+            )
         elif max_props is not None and found > max_props:
-            raise TypeError(f"expected at most {max_props} properties,"
-                            f" got {found}")
+            raise TypeError(f"expected at most {max_props} properties," f" got {found}")
         if (found := len(comps)) < min_comps:
-            raise TypeError(f"expected at least {min_comps} components,"
-                            f" got {found}")
+            raise TypeError(
+                f"expected at least {min_comps} components," f" got {found}"
+            )
         elif max_comps is not None and found > max_comps:
-            raise TypeError(f"expected at most {max_comps} components,"
-                            f" got {found}")
+            raise TypeError(f"expected at most {max_comps} components," f" got {found}")
         return props, comps
 
     def forget(self, *args):
@@ -507,7 +517,7 @@ class ComponentGraph:
         states = reduce(or_, comps)
         for p, _ in props:
             for c in comps:
-                c.check(p, states)
+                c.check(p, states.states)
         self.update()
 
     def check(self, *args, _warn=True, **aliased):
@@ -518,7 +528,7 @@ class ComponentGraph:
         the LTS and then compared with the states of the considered components.
         Their relation is the recorded in the components and the nodes table.
         Properties may be aliased, that is, an alias is recorded instead of
-        the property itself, this allow producing a simpler nodes table with 
+        the property itself, this allow producing a simpler nodes table with
         short property names instead of complex expressions.
 
         # Arguments
@@ -554,22 +564,25 @@ class ComponentGraph:
     @cached_property
     def _GCS(self):
         "A _GCS subclass tied to the components of this graph."
+
         class MyGCS(_GCS):
             components = {c.num for c in self.components}
+
         return MyGCS
 
     # setrel, strict -> matching setrel
-    _relmatch = {(setrel.HASNO, True): {setrel.HASNO},
-                 (setrel.HASNO, False): {setrel.HASNO},
-                 (setrel.HAS, True): {setrel.HAS},
-                 (setrel.HAS, False): {setrel.HAS, setrel.CONTAINS,
-                                       setrel.ISIN, setrel.EQUALS},
-                 (setrel.CONTAINS, True): {setrel.CONTAINS},
-                 (setrel.CONTAINS, False): {setrel.CONTAINS, setrel.EQUALS},
-                 (setrel.ISIN, True): {setrel.ISIN},
-                 (setrel.ISIN, False): {setrel.ISIN, setrel.EQUALS},
-                 (setrel.EQUALS, True): {setrel.EQUALS},
-                 (setrel.EQUALS, False): {setrel.EQUALS}}
+    _relmatch = {
+        (setrel.HASNO, True): {setrel.HASNO},
+        (setrel.HASNO, False): {setrel.HASNO},
+        (setrel.HAS, True): {setrel.HAS},
+        (setrel.HAS, False): {setrel.HAS, setrel.CONTAINS, setrel.ISIN, setrel.EQUALS},
+        (setrel.CONTAINS, True): {setrel.CONTAINS},
+        (setrel.CONTAINS, False): {setrel.CONTAINS, setrel.EQUALS},
+        (setrel.ISIN, True): {setrel.ISIN},
+        (setrel.ISIN, False): {setrel.ISIN, setrel.EQUALS},
+        (setrel.EQUALS, True): {setrel.EQUALS},
+        (setrel.EQUALS, False): {setrel.EQUALS},
+    }
 
     def __call__(self, prop, rel=setrel.HAS, strict=False):
         """Return the component numbers that match `prop` with relation `rel`.
@@ -602,8 +615,11 @@ class ComponentGraph:
                 self.check(prop, c.num)
         if update:
             self.update()
-        return self._GCS(c.num for c in self.components
-                         if c.props[prop] in self._relmatch[rel, strict])
+        return self._GCS(
+            c.num
+            for c in self.components
+            if c.props[prop] in self._relmatch[rel, strict]
+        )
 
     def HASNO(self, prop):
         """Shorthand for `__call__(prop, setrel.HASNO, True)`."""
@@ -645,8 +661,7 @@ class ComponentGraph:
         """Shorthand for `__call__(prop, setrel.EQUALS, False)`."""
         return self(prop, setrel.EQUALS, False)
 
-    def select(self, *args, _all=True, _rel=setrel.ISIN, _strict=False,
-               **aliased):
+    def select(self, *args, _all=True, _rel=setrel.ISIN, _strict=False, **aliased):
         """Return the component numbers that match all/any properties.
 
         Given a series of properties `props` and series of components `comps`,
@@ -706,12 +721,14 @@ class ComponentGraph:
         _, comps = self._get_args(args, max_props=0)
         lts = self.lts
         g2m, vmin, vmax = lts.g2m, lts.vmin, lts.vmax
-        data = [[g2m[var], val, *(c.counts.get((var, val), 0) for c in comps)]
-                for var in lts.vars
-                for val in range(vmin[var], vmax[var]+1)]
-        df = pd.DataFrame.from_records(data,
-                                       columns=["variable", "value",
-                                                *(c.num for c in comps)])
+        data = [
+            [g2m[var], val, *(c.counts.get((var, val), 0) for c in comps)]
+            for var in lts.vars
+            for val in range(vmin[var], vmax[var] + 1)
+        ]
+        df = pd.DataFrame.from_records(
+            data, columns=["variable", "value", *(c.num for c in comps)]
+        )
         df.set_index(["variable", "value"], inplace=True)
         df.sort_index(inplace=True)
         if transpose:
@@ -719,17 +736,19 @@ class ComponentGraph:
         else:
             return df
 
-    def pca(self,
-            *args,
-            transpose=False,
-            n_components=2,
-            n_iter=3,
-            copy=True,
-            check_input=True,
-            engine="sklearn",
-            random_state=42,
-            rescale_with_mean=True,
-            rescale_with_std=True):
+    def pca(
+        self,
+        *args,
+        transpose=False,
+        n_components=2,
+        n_iter=3,
+        copy=True,
+        check_input=True,
+        engine="sklearn",
+        random_state=42,
+        rescale_with_mean=True,
+        rescale_with_std=True,
+    ):
         """Principal component analysis of the matrix returned by `count()`.
 
         # Arguments
@@ -749,14 +768,16 @@ class ComponentGraph:
         count = count[count.sum(axis="columns") > 0]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            pca = prince.PCA(n_components=n_components,
-                             n_iter=n_iter,
-                             copy=copy,
-                             check_input=check_input,
-                             engine=engine,
-                             random_state=random_state,
-                             rescale_with_mean=rescale_with_mean,
-                             rescale_with_std=rescale_with_std)
+            pca = prince.PCA(
+                n_components=n_components,
+                n_iter=n_iter,
+                copy=copy,
+                check_input=check_input,
+                engine=engine,
+                random_state=random_state,
+                rescale_with_mean=rescale_with_mean,
+                rescale_with_std=rescale_with_std,
+            )
             pca.fit(count)
             trans = pca.transform(count)
         for idx in set(count.index) - set(trans.index):
@@ -784,21 +805,21 @@ class ComponentGraph:
         A [SymPy Boolean formula](https://docs.sympy.org/latest/modules/logic.html)
         or a `dict` mapping component numbers to such formulas.
         """
+
         def remap(expr):
             if isinstance(expr, sympy.Symbol):
                 return sympy.Symbol(self.lts.g2m[expr.name])
             else:
                 return expr.func(*(remap(a) for a in expr.args))
+
         _, compos = self._get_args(args, max_props=0)
         if variables is not None:
             variables = [self.lts.m2g[v] for v in variables]
-        forms = {c.num: remap(c.form(variables, normalise))
-                 for c in compos}
+        forms = {c.num: remap(c.form(variables, normalise)) for c in compos}
         if separate:
             return forms
         else:
-            return sympy.simplify_logic(sympy.Or(*forms.values()),
-                                        form=normalise)
+            return sympy.simplify_logic(sympy.Or(*forms.values()), form=normalise)
 
     #
     # splits
@@ -832,7 +853,7 @@ class ComponentGraph:
                             rem.add(c)
                             add.add(p)
                             yield size  # count after because 1st yield will
-                            size += 1   # correspond to rem.add(c)
+                            size += 1  # correspond to rem.add(c)
             else:
                 raise TypeError(f"unexpected property {prop!r}")
             add.difference_update(rem)
@@ -863,14 +884,15 @@ class ComponentGraph:
 
         A new `ComponentGraph` (or the original one if no split occurred).
         """
-        props, comps = self._get_args(args, aliased,
-                                      min_props=1, topo_props=True)
+        props, comps = self._get_args(args, aliased, min_props=1, topo_props=True)
         limit = _limit
         rem, add = set(), set()
         for size in self._split(props, comps, rem, add, _warn):
             if limit and size > limit:
-                answer = input(f"We have created a graph with {size} nodes,"
-                               f" do you want to continue? [N/y] ")
+                answer = input(
+                    f"We have created a graph with {size} nodes,"
+                    f" do you want to continue? [N/y] "
+                )
                 if not answer.lower().startswith("y"):
                     break
                 limit += _limit
@@ -878,8 +900,9 @@ class ComponentGraph:
             if _warn:
                 log.warn("no split occurred")
             return self
-        return self.__class__(self.model, self.lts,
-                              *((set(self.components) - rem) | add))
+        return self.__class__(
+            self.model, self.lts, *((set(self.components) - rem) | add)
+        )
 
     def explicit(self, *args, _limit=256):
         """Split components into their individual states.
@@ -897,27 +920,26 @@ class ComponentGraph:
         """
         _, comps = self._get_args(args, max_props=0)
         if _limit:
-            size = (sum((len(c) for c in comps), 0)
-                    + len(self.components)
-                    - len(comps))
+            size = sum((len(c) for c in comps), 0) + len(self.components) - len(comps)
             if size > _limit:
-                answer = input(f"We will create a graph with {size} nodes,"
-                               f" do you want to continue? [N/y] ")
+                answer = input(
+                    f"We will create a graph with {size} nodes,"
+                    f" do you want to continue? [N/y] "
+                )
                 if not answer.lower().startswith("y"):
                     return
         rem, add, s2c = set(), set(), {}
-        if (nodes := getattr(self, "_cached_nodes", None)) is not None \
-                and "component" in nodes.columns:
-            s2c.update((row.name, row.component)
-                       for _, row in nodes.iterrows())
+        if (
+            nodes := getattr(self, "_cached_nodes", None)
+        ) is not None and "component" in nodes.columns:
+            s2c.update((row.name, row.component) for _, row in nodes.iterrows())
         for c in comps:
             if len(c) > 1:
                 new = tuple(c.explicit())
                 s2c.update((n.num, c.num) for n in new)
                 rem.add(c)
                 add.update(new)
-        cg = self.__class__(self.model, self.lts,
-                            *(set(self.components) - rem | add))
+        cg = self.__class__(self.model, self.lts, *(set(self.components) - rem | add))
         cg.n["component"] = lambda row: s2c.get(row.name, row.name)
         return cg
 
@@ -929,9 +951,9 @@ class ComponentGraph:
                 props.update(cls)
         return hset(props)
 
-    def classify(self, *args, _split=True, _limit=256,
-                 _col=None, _src=None, _dst=None,
-                 **aliased):
+    def classify(
+        self, *args, _split=True, _limit=256, _col=None, _src=None, _dst=None, **aliased
+    ):
         """Classify components against a set of aliased properties.
 
         Every given component is checked or split against every given propery.
@@ -990,8 +1012,7 @@ class ComponentGraph:
         _, comps = self._get_args(args, max_props=0, min_comps=2)
         rem = set(comps)
         add = {comps[0].merge_with(comps[1:])}
-        return self.__class__(self.model, self.lts,
-                              *(set(self.components) - rem | add))
+        return self.__class__(self.model, self.lts, *(set(self.components) - rem | add))
 
     def drop(self, *args, _warn=True):
         """Drop some components.
@@ -1014,8 +1035,16 @@ class ComponentGraph:
             return
         return self.__class__(self.model, self.lts, *keep)
 
-    def search(self, *comps, _col="search", _prune=False, _split=True,
-               _warn=True, _limit=256, **stages):
+    def search(
+        self,
+        *comps,
+        _col="search",
+        _prune=False,
+        _split=True,
+        _warn=True,
+        _limit=256,
+        **stages,
+    ):
         """Search for sequences of properties.
 
         The graph is first classified as with `classify()` then for every pair
@@ -1046,8 +1075,9 @@ class ComponentGraph:
         # FIXME: to be tested
         self._get_args(comps, max_props=0)  # just to check args
         if len(stages) < 2:
-            raise TypeError(f"expected at least two properties,"
-                            f" but got {len(stages)}")
+            raise TypeError(
+                f"expected at least two properties," f" but got {len(stages)}"
+            )
         # first: check searched properties
         if _split:
             cg = self.split(*comps, _warn=_warn, **stages)
@@ -1074,8 +1104,9 @@ class ComponentGraph:
                     tgt_basin = f"pred_s({tgt_form})"
                     alias = f"reach_{nxt}"
                     if _split:
-                        cg = cg.split(*src, _warn=_warn, _limit=_limit,
-                                      **{alias: tgt_basin})
+                        cg = cg.split(
+                            *src, _warn=_warn, _limit=_limit, **{alias: tgt_basin}
+                        )
                     else:
                         cg.check(*src, _warn=_warn, **{alias: tgt_basin})
         # which component validates property + reachability -> new column
@@ -1100,21 +1131,17 @@ class ComponentGraph:
         icons = []
         if "INIT" in args.get("EQUALS", ()):
             icons.append("▶")
-        elif any("INIT" in args.get(rel, ())
-                 for rel in ("HAS", "CONTAINS", "ISIN")):
+        elif any("INIT" in args.get(rel, ()) for rel in ("HAS", "CONTAINS", "ISIN")):
             icons.append("▷")
         if "scc" in args.get("EQUALS", ()):
             icons.append("⏺")
         elif "hull" in args.get("EQUALS", ()):
             icons.append("☍")
-        elif any("scc" in args.get(rel, ())
-                 for rel in ("CONTAINS", "EQUALS")):
+        elif any("scc" in args.get(rel, ()) for rel in ("CONTAINS", "EQUALS")):
             icons.append("○")
-        if any("DEAD" in args.get(rel, ())
-               for rel in ("ISIN", "EQUALS")):
+        if any("DEAD" in args.get(rel, ()) for rel in ("ISIN", "EQUALS")):
             icons.append("⏹")
-        elif any("DEAD" in args.get(rel, ())
-                 for rel in ("HAS", "CONTAINS")):
+        elif any("DEAD" in args.get(rel, ()) for rel in ("HAS", "CONTAINS")):
             icons.append("□")
         if icons:
             return f"{txt}\n{''.join(icons)}"
@@ -1141,13 +1168,14 @@ class ComponentGraph:
             layout_extra = {"PCA": pos}
         except Exception:
             layout_extra = {}
-            log.print("could not compute PCA, this layout is thus disabled",
-                      "warning")
-        options = dict(nodes_fill_color="size",
-                       nodes_fill_palette=("red-green/white", "abs"),
-                       nodes_label_str=self._nodes_label_str,
-                       layout_extra=layout_extra,
-                       edges_label="actions")
+            log.print("could not compute PCA, this layout is thus disabled", "warning")
+        options = dict(
+            nodes_fill_color="size",
+            nodes_fill_palette=("red-green/white", "abs"),
+            nodes_label_str=self._nodes_label_str,
+            layout_extra=layout_extra,
+            edges_label="actions",
+        )
         options.update(opt)
         return Graph(self.nodes, self.edges, **options)
 
@@ -1178,7 +1206,7 @@ class ComponentGraph:
          - `str spec`: specification to be parsed
 
         # Return
-        
+
         A `sdd` containing the specifies states.
         """
         return self.lts(self._parse_state(spec, self.lts.m2g))
