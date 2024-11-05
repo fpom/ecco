@@ -8,8 +8,8 @@ from itertools import chain, product
 from operator import or_
 from typing import Optional, Tuple, Set, Union, Sequence, Dict, Self
 
-from .mrrparse import (Indenter, Lark_StandAlone, ParseError, Token,
-                       Transformer, v_args)
+from .mrrparse import Indenter, Lark_StandAlone, ParseError, Token, Transformer, v_args
+from .pattparse import Lark_StandAlone as Lark_StandAlone_Pattern
 
 
 #
@@ -42,31 +42,36 @@ class BindError(Exception):
 
 
 _line_dir = re.compile(r'^#\s+([0-9]+)\s+"<stdin>"\s*$')
-_cpp_head = subprocess.run(["cpp", "--traditional", "-C"],
-                           input="", encoding="utf-8",
-                           capture_output=True).stdout
+_cpp_head = subprocess.run(
+    ["cpp", "--traditional", "-C"], input="", encoding="utf-8", capture_output=True
+).stdout
 _comment = re.compile(r"(/\*.*?\*/)", re.S)
 _cpp_head = _comment.split(_cpp_head)[1::2]
 
 
 def cpp(text, **var):
-    out = subprocess.run(["cpp", "--traditional", "-C"]
-                         + [f"-D{k}={v}" for k, v in var.items()],
-                         input=text, encoding="utf-8",
-                         capture_output=True).stdout
+    out = subprocess.run(
+        ["cpp", "--traditional", "-C"] + [f"-D{k}={v}" for k, v in var.items()],
+        input=text,
+        encoding="utf-8",
+        capture_output=True,
+    ).stdout
     for hd in _cpp_head:
         out = out.replace(hd, "")
     # we don't use cpp -P but remove line directives because otherwise some
     # empty lines are missing at the beginning
     # + we remove comments
-    return "".join((line.split("#", 1)[0]).rstrip() + "\n"
-                   for line in out.splitlines()
-                   if not _line_dir.match(line))
+    return "".join(
+        (line.split("#", 1)[0]).rstrip() + "\n"
+        for line in out.splitlines()
+        if not _line_dir.match(line)
+    )
 
 
 #
 # model
 #
+
 
 def dictfield():
     return field(default_factory=dict)
@@ -87,16 +92,18 @@ class _Element:
 
 @dataclass(unsafe_hash=True)
 class VarDecl(_Element):
-    line: int                          # source line number
-    name: str                          # variable name
-    domain: Set[int]                   # variable domain (possible values)
-    size: Optional[int]                # if not None: array length
-    init: Union[None,                  # omega clock
-                Set[int],              # non-array initial values
-                Tuple[Set[int], ...]]  # array initial values
-    description: str                   # textual description
-    isbool: bool                       # Boolean or int variable
-    clock: Optional[str] = None        # name of clock that tick it
+    line: int  # source line number
+    name: str  # variable name
+    domain: Set[int]  # variable domain (possible values)
+    size: Optional[int]  # if not None: array length
+    init: Union[
+        None,  # omega clock
+        Set[int],  # non-array initial values
+        Tuple[Set[int], ...],
+    ]  # array initial values
+    description: str  # textual description
+    isbool: bool  # Boolean or int variable
+    clock: Optional[str] = None  # name of clock that tick it
 
     def __post_init__(self):
         self._assert(self.size is None or self.size > 0, "invalid size")
@@ -104,8 +111,7 @@ class VarDecl(_Element):
             self.init = self._init_dom(self.init)
         else:
             if isinstance(self.init, Sequence):
-                self._assert(len(self.init) == self.size,
-                             "array/init size mismatch")
+                self._assert(len(self.init) == self.size, "array/init size mismatch")
                 self.init = tuple(self._init_dom(i) for i in self.init)
             else:
                 self.init = (self._init_dom(self.init),) * self.size
@@ -130,8 +136,10 @@ class VarDecl(_Element):
             idx = ""
         else:
             idx = f"[{self.size}]"
-        return (f"{{{min(self.domain)}..{max(self.domain)}}}{idx} {self.name}"
-                f" = {self.init}: {self.description}")
+        return (
+            f"{{{min(self.domain)}..{max(self.domain)}}}{idx} {self.name}"
+            f" = {self.init}: {self.description}"
+        )
 
     def __html__(self, h):
         space = False
@@ -140,8 +148,7 @@ class VarDecl(_Element):
                 h.write("bool")
                 space = True
         elif self.clock is not None:
-            h.write(f"{{{self.clock}: "
-                    f"{min(self.domain)}..{max(self.domain)}}}")
+            h.write(f"{{{self.clock}: " f"{min(self.domain)}..{max(self.domain)}}}")
             space = True
         else:
             h.write(f"{{{min(self.domain)}..{max(self.domain)}}}")
@@ -200,34 +207,51 @@ class VarDecl(_Element):
 
 @dataclass(unsafe_hash=True)
 class VarUse(_Element):
-    line: int                                     # source line number
-    column: Optional[int]                         # source line column
-    name: str                                     # variable name
-    index: Optional[Union[int,                    # constant index
-                          str,                    # quantified index
-                          tuple[str, str, int]]   # shifted quantified index
-                    ] = None                      # no var index by default
-    locrel: Optional[str] = None                  # variable in other location
-    locname: Optional[str] = None                 # inner location name
-    locidx: Optional[Union[int,                   # constant index
-                           str,                   # quantified index
-                           tuple[str, str, int]]  # shifted quantified index
-                     ] = None                     # no inner loc idx by default
+    line: int  # source line number
+    column: Optional[int]  # source line column
+    name: str  # variable name
+    index: Optional[
+        Union[
+            int,  # constant index
+            str,  # quantified index
+            tuple[str, str, int],
+        ]  # shifted quantified index
+    ] = None  # no var index by default
+    locrel: Optional[str] = None  # variable in other location
+    locname: Optional[str] = None  # inner location name
+    locidx: Optional[
+        Union[
+            int,  # constant index
+            str,  # quantified index
+            tuple[str, str, int],
+        ]  # shifted quantified index
+    ] = None  # no inner loc idx by default
 
     def __post_init__(self):
-        self._assert(self.locrel in (None, "outer", "inner"),
-                     f"invalid location relation {self.locrel!r}")
-        self._assert(self.locname is None if self.locrel is None else True,
-                     "locname should be None")
-        self._assert(self.locidx is None if self.locrel is None else True,
-                     "locidx should be None")
-        self._assert(self.locname is None if self.locrel == "outer" else True,
-                     "outer location cannot be named")
-        self._assert(self.locidx is None if self.locrel == "outer" else True,
-                     "outer location cannot be indexed")
-        self._assert(self.locname is not None
-                     if self.locrel == "inner" else True,
-                     "missing value for locname")
+        self._assert(
+            self.locrel in (None, "outer", "inner"),
+            f"invalid location relation {self.locrel!r}",
+        )
+        self._assert(
+            self.locname is None if self.locrel is None else True,
+            "locname should be None",
+        )
+        self._assert(
+            self.locidx is None if self.locrel is None else True,
+            "locidx should be None",
+        )
+        self._assert(
+            self.locname is None if self.locrel == "outer" else True,
+            "outer location cannot be named",
+        )
+        self._assert(
+            self.locidx is None if self.locrel == "outer" else True,
+            "outer location cannot be indexed",
+        )
+        self._assert(
+            self.locname is not None if self.locrel == "inner" else True,
+            "missing value for locname",
+        )
 
     def __str__(self):
         if self.index is None:
@@ -271,26 +295,30 @@ class VarUse(_Element):
 
     def make(self, loc, index):
         if self.locrel is None:
-            self._assert(self.name in loc.var,
-                         f"no local variable {self.name}")
+            self._assert(self.name in loc.var, f"no local variable {self.name}")
             self.decl = loc.var[self.name]
         elif self.locrel == "outer":
             self._assert(loc.parent is not None, "no outer location")
-            self._assert(self.name in loc.parent.var,
-                         f"no outer variable {self.name}")
+            self._assert(self.name in loc.parent.var, f"no outer variable {self.name}")
             self.decl = loc.parent.var[self.name]
         else:
-            self._assert(self.locname in loc.sub,
-                         f"no inner location {self.locname!r}")
-            self._assert(self.name in loc.sub[self.locname].var,
-                         f"no variable {self.name} in {self.locname}")
-            self._assert(loc.sub[self.locname].size is not None
-                         if self.locidx is not None else True,
-                         f"indexing non-array location {self.locname!r}")
-            self._assert(0 <= self.locidx < loc.sub[self.locname].size
-                         if isinstance(self.locidx, int) else True,
-                         f"invalid index for {self.locname!r}"
-                         f"[{loc.sub[self.locname].size}]")
+            self._assert(self.locname in loc.sub, f"no inner location {self.locname!r}")
+            self._assert(
+                self.name in loc.sub[self.locname].var,
+                f"no variable {self.name} in {self.locname}",
+            )
+            self._assert(
+                loc.sub[self.locname].size is not None
+                if self.locidx is not None
+                else True,
+                f"indexing non-array location {self.locname!r}",
+            )
+            self._assert(
+                0 <= self.locidx < loc.sub[self.locname].size
+                if isinstance(self.locidx, int)
+                else True,
+                f"invalid index for {self.locname!r}" f"[{loc.sub[self.locname].size}]",
+            )
             self.decl = loc.sub[self.locname].var[self.name]
         if isinstance(self.index, str) and self.index != "self":
             index.setdefault(self.index, set(self.decl.domain))
@@ -299,12 +327,10 @@ class VarUse(_Element):
             index.setdefault(self.index[0], set(self.decl.domain))
             index[self.index[0]] &= self.decl.domain
         if isinstance(self.locidx, str):
-            index.setdefault(self.locidx,
-                             set(range(loc.sub[self.locname].size)))
+            index.setdefault(self.locidx, set(range(loc.sub[self.locname].size)))
             index[self.locidx] &= set(range(loc.sub[self.locname].size))
         elif isinstance(self.locidx, tuple):
-            index.setdefault(self.locidx[0],
-                             set(range(loc.sub[self.locname].size)))
+            index.setdefault(self.locidx[0], set(range(loc.sub[self.locname].size)))
             index[self.locidx[0]] &= set(range(loc.sub[self.locname].size))
 
     def _bind_index(self, index, vals, doms):
@@ -330,13 +356,15 @@ class VarUse(_Element):
         raise BindError("unsupported index {index!r}")
 
     def bind(self, vals, doms):
-        var = VarUse(self.line,
-                     self.column,
-                     self.name,
-                     self._bind_index(self.index, vals, doms),
-                     self.locrel,
-                     self.locname,
-                     self._bind_index(self.locidx, vals, doms))
+        var = VarUse(
+            self.line,
+            self.column,
+            self.name,
+            self._bind_index(self.index, vals, doms),
+            self.locrel,
+            self.locname,
+            self._bind_index(self.locidx, vals, doms),
+        )
         var.decl = self.decl
         return var
 
@@ -374,21 +402,23 @@ class VarUse(_Element):
 
 @dataclass(unsafe_hash=True)
 class BinOp(_Element):
-    line: int                              # source line number
-    column: Optional[int]                  # source line column
-    left: Union[VarUse, int]               # expression left-hand side
-    op: str                                # infix operator
+    line: int  # source line number
+    column: Optional[int]  # source line column
+    left: Union[VarUse, int]  # expression left-hand side
+    op: str  # infix operator
     right: Union[VarUse, Self, int, None]  # expression right-hand side
 
     def __str__(self):
-        right = self.right if self.right is not None else '*'
+        right = self.right if self.right is not None else "*"
         return f"{self.left}{self.op}{right}"
 
     def __html__(self, h):
-        if isinstance(self.left, VarUse) \
-                and self.left.decl.isbool \
-                and self.op == "==" \
-                and self.right in (0, 1):
+        if (
+            isinstance(self.left, VarUse)
+            and self.left.decl.isbool
+            and self.op == "=="
+            and self.right in (0, 1)
+        ):
             if self.right:
                 with h("span", style="color:#080;"):
                     self.left.__html__(h)
@@ -419,23 +449,24 @@ class BinOp(_Element):
         if isinstance(self.right, VarUse):
             self.right.make(loc, index)
         if self.right is None:
-            self._assert(isinstance(self.left, VarUse)
-                         and self.left.decl.clock is not None,
-                         f"cannot assign '*' to non-clocked variable")
+            self._assert(
+                isinstance(self.left, VarUse) and self.left.decl.clock is not None,
+                f"cannot assign '*' to non-clocked variable",
+            )
 
     def bind(self, vals, doms):
-        return BinOp(self.line,
-                     self.column,
-                     self.left if isinstance(self.left, int)
-                     else self.left.bind(vals, doms),
-                     self.op,
-                     self.right if isinstance(self.right, int)
-                     or self.right is None
-                     else self.right.bind(vals, doms))
+        return BinOp(
+            self.line,
+            self.column,
+            self.left if isinstance(self.left, int) else self.left.bind(vals, doms),
+            self.op,
+            self.right
+            if isinstance(self.right, int) or self.right is None
+            else self.right.bind(vals, doms),
+        )
 
     def gal(self, loc):
-        left = (f"{self.left}" if isinstance(self.left, int)
-                else self.left.gal(loc))
+        left = f"{self.left}" if isinstance(self.left, int) else self.left.gal(loc)
         if self.right is None:
             right = -1
         elif isinstance(self.right, int):
@@ -456,9 +487,9 @@ class BinOp(_Element):
 
 @dataclass(unsafe_hash=True)
 class Assignment(_Element):
-    line: int                               # source line number
-    column: Optional[int]                   # source line column
-    target: VarUse                          # assigned variable
+    line: int  # source line number
+    column: Optional[int]  # source line column
+    target: VarUse  # assigned variable
     value: Union[VarUse, BinOp, int, None]  # expression assigned to variable
 
     def __str__(self):
@@ -490,22 +521,28 @@ class Assignment(_Element):
     def make(self, loc, index):
         self.target.make(loc, index)
         if self.value is None:
-            self._assert(self.target.decl.clock is not None,
-                         "cannot assign '*' to non clocked variable")
+            self._assert(
+                self.target.decl.clock is not None,
+                "cannot assign '*' to non clocked variable",
+            )
         elif not isinstance(self.value, int):
             self.value.make(loc, index)
-        self._assert(not isinstance(self.value, int)
-                     or self.value is None
-                     or self.value in self.target.decl.domain,
-                     f"out-of-domain assignment {self}")
+        self._assert(
+            not isinstance(self.value, int)
+            or self.value is None
+            or self.value in self.target.decl.domain,
+            f"out-of-domain assignment {self}",
+        )
 
     def bind(self, vals, doms):
-        return Assignment(self.line,
-                          self.column,
-                          self.target.bind(vals, doms),
-                          self.value if isinstance(self.value, int)
-                          or self.value is None
-                          else self.value.bind(vals, doms))
+        return Assignment(
+            self.line,
+            self.column,
+            self.target.bind(vals, doms),
+            self.value
+            if isinstance(self.value, int) or self.value is None
+            else self.value.bind(vals, doms),
+        )
 
     def gal(self, loc):
         tgt = self.target.gal(loc)
@@ -519,11 +556,7 @@ class Assignment(_Element):
             yield f"if ({tgt} > {max(self.target.decl.domain)}) {{ abort; }}"
 
     def cond(self):
-        return BinOp(self.line,
-                     self.column,
-                     self.target,
-                     "==",
-                     self.value)
+        return BinOp(self.line, self.column, self.target, "==", self.value)
 
     def vars(self, path):
         yield from self.target.vars(path)
@@ -533,12 +566,12 @@ class Assignment(_Element):
 
 @dataclass(unsafe_hash=True)
 class Action(_Element):
-    line: int                       # source line number
-    left: Tuple[BinOp, ...]         # conditions
-    right: Tuple[Assignment, ...]   # assignments
-    tags: Tuple[str, ...] = ()      # tags
+    line: int  # source line number
+    left: Tuple[BinOp, ...]  # conditions
+    right: Tuple[Assignment, ...]  # assignments
+    tags: Tuple[str, ...] = ()  # tags
     quantifier: dict = dictfield()  # free indexes quantifiers
-    index: dict = dictfield()       # free indexes domains
+    index: dict = dictfield()  # free indexes domains
 
     def __str__(self):
         q = []
@@ -546,12 +579,16 @@ class Action(_Element):
             q.append("for all " + ", ".join(qall))
         if qany := [v for v, q in self.quantifier.items() if q == "any"]:
             q.append("for any " + ", ".join(qany))
-        return "".join([f"[{', '.join(self.tags)}] " if self.tags else "",
-                        ", ".join(str(c) for c in self.left),
-                        " >> ",
-                        ", ".join(str(a) for a in self.right),
-                        " " if q else "",
-                        ", ".join(q)])
+        return "".join(
+            [
+                f"[{', '.join(self.tags)}] " if self.tags else "",
+                ", ".join(str(c) for c in self.left),
+                " >> ",
+                ", ".join(str(a) for a in self.right),
+                " " if q else "",
+                ", ".join(q),
+            ]
+        )
 
     def __html__(self, h):
         if self.tags:
@@ -603,20 +640,17 @@ class Action(_Element):
                     pass
 
     def bind(self, vals):
-        return Action(self.line,
-                      tuple(left.bind(vals, self.index)
-                            for left in self.left),
-                      tuple(right.bind(vals, self.index)
-                            for right in self.right),
-                      self.tags,
-                      {v: q for v, q in self.quantifier.items()
-                       if v not in vals},
-                      {v: d for v, d in self.index.items()
-                       if v not in vals})
+        return Action(
+            self.line,
+            tuple(left.bind(vals, self.index) for left in self.left),
+            tuple(right.bind(vals, self.index) for right in self.right),
+            self.tags,
+            {v: q for v, q in self.quantifier.items() if v not in vals},
+            {v: d for v, d in self.index.items() if v not in vals},
+        )
 
     def expand_all(self):
-        doms = {v: self.index[v] for v, q in self.quantifier.items()
-                if q == "all"}
+        doms = {v: self.index[v] for v, q in self.quantifier.items() if q == "all"}
         names = list(doms)
         expand = {}
         for side in ("left", "right"):
@@ -630,30 +664,29 @@ class Action(_Element):
                     except BindError:
                         pass
             expand[side] = reduce(or_, newside.values())
-        return Action(self.line,
-                      expand["left"],
-                      expand["right"],
-                      self.tags,
-                      {v: q for v, q in self.quantifier.items()
-                       if v not in doms},
-                      {v: d for v, d in self.index.items()
-                       if v not in doms})
+        return Action(
+            self.line,
+            expand["left"],
+            expand["right"],
+            self.tags,
+            {v: q for v, q in self.quantifier.items() if v not in doms},
+            {v: d for v, d in self.index.items() if v not in doms},
+        )
 
 
 @dataclass(unsafe_hash=True)
 class Location(_Element):
-    line: int                             # source line number
-    variables: Tuple[VarDecl, ...]        # local variables
-    constraints: Tuple[Action, ...]       # constraints
-    rules: Tuple[Action, ...]             # rules
-    locations: Tuple["Location", ...]     # nested locations
-    name: Optional[str] = None            # name if nested
-    size: Optional[int] = None            # size of array
+    line: int  # source line number
+    variables: Tuple[VarDecl, ...]  # local variables
+    constraints: Tuple[Action, ...]  # constraints
+    rules: Tuple[Action, ...]  # rules
+    locations: Tuple["Location", ...]  # nested locations
+    name: Optional[str] = None  # name if nested
+    size: Optional[int] = None  # size of array
     clocks: Dict[str, str] = dictfield()  # clock names -> description
 
     def __post_init__(self):
-        self._assert(self.size is None or self.size > 0,
-                     "invalid array size")
+        self._assert(self.size is None or self.size > 0, "invalid array size")
         self.variables = tuple(self.variables)
         self.constraints = tuple(self.constraints)
         self.rules = tuple(self.rules)
@@ -667,14 +700,16 @@ class Location(_Element):
             parts.append(f"{self.name}")
         if self.size is not None:
             parts.append(f"[{self.size}]")
-        parts.append(f"(V={len(self.variables)},"
-                     f"C={len(self.constraints)},"
-                     f"R={len(self.rules)},"
-                     f"L={len(self.locations)})")
+        parts.append(
+            f"(V={len(self.variables)},"
+            f"C={len(self.constraints)},"
+            f"R={len(self.rules)},"
+            f"L={len(self.locations)})"
+        )
         return "".join(parts)
 
     def __html__(self, h, indent=0):
-        tab = " " * (indent*4)
+        tab = " " * (indent * 4)
         if self.name is not None:
             with h("span", style="font-weight:bold;", BREAK=True):
                 h.write(tab)
@@ -707,20 +742,18 @@ class Location(_Element):
                 var.__html__(h)
                 h.write("\n")
         for loc in self.locations:
-            loc.__html__(h, indent+1)
+            loc.__html__(h, indent + 1)
         for sec in ("constraints", "rules"):
             num = 1
             actions = getattr(self, sec)
             if actions:
                 h.write(tab)
-                with h("span", style="font-weight:bold;color:#008;",
-                       BREAK=True):
+                with h("span", style="font-weight:bold;color:#008;", BREAK=True):
                     h.write(f"{sec}:")
                 for act in actions:
                     h.write(tab + "    ")
                     act.__html__(h)
-                    with h("span", style="color:#888;",
-                           BREAK=True):
+                    with h("span", style="color:#888;", BREAK=True):
                         h.write(f"  # {sec[0].upper()}{num}")
                     num += 1
 
@@ -746,8 +779,9 @@ class Location(_Element):
             top = self
         for var in self.variables:
             if var.clock:
-                var._assert(var.clock in top.clocks,
-                            f"clock {var.clock} is not defined")
+                var._assert(
+                    var.clock in top.clocks, f"clock {var.clock} is not defined"
+                )
                 top.clocked[var.clock].append(var)
         for loc in self.locations:
             if loc.size is None:
@@ -784,7 +818,7 @@ BOOL = {0, 1}
 
 
 @v_args(inline=True)
-class MRRTrans (Transformer):
+class MRRTrans(Transformer):
     def start(self, clocks, model):
         if clocks:
             model.clocks.update(clocks)
@@ -799,11 +833,12 @@ class MRRTrans (Transformer):
             line = getattr(obj, "line", None)
             if line is not None:
                 break
-        return Location(line,
-                        variables or (),
-                        constraints or (),
-                        rules or (),
-                        locations)
+        return Location(
+            line, variables or (), constraints or (), rules or (), locations
+        )
+
+    def pattern(self, *rules):
+        return rules
 
     def sequence(self, *args):
         return args
@@ -838,15 +873,27 @@ class MRRTrans (Transformer):
         else:
             init = init & typ
         if size is None:
-            _assert(not isinstance(init, Tuple), name.line, None,
-                    "cannot initialise scalar with array")
+            _assert(
+                not isinstance(init, Tuple),
+                name.line,
+                None,
+                "cannot initialise scalar with array",
+            )
         else:
             if not isinstance(init, Tuple):
                 init = [init] * size
             elif init.shape != typ.size:
                 _error(name.line, None, "type/init size mismatch")
-        return VarDecl(name.line, name.value, typ, size, init,
-                       desc.value.strip(), typ is BOOL, clock)
+        return VarDecl(
+            name.line,
+            name.value,
+            typ,
+            size,
+            init,
+            desc.value.strip(),
+            typ is BOOL,
+            clock,
+        )
 
     def vardecl_short(self, name, sign, desc):
         if sign.value == "+":
@@ -857,8 +904,9 @@ class MRRTrans (Transformer):
             init = {0, 1}
         else:
             _error(name.line, None, f"unexpected initial value {sign.value!r}")
-        return VarDecl(name.line, name.value, BOOL, None, init,
-                       desc.value.strip(), True)
+        return VarDecl(
+            name.line, name.value, BOOL, None, init, desc.value.strip(), True
+        )
 
     def type(self, dom, size):
         if size is None:
@@ -870,7 +918,7 @@ class MRRTrans (Transformer):
         return BOOL
 
     def type_interval(self, start, end):
-        return set(range(_int(start), _int(end)+1))
+        return set(range(_int(start), _int(end) + 1))
 
     def type_clock(self, clock, start, end):
         return clock.value, self.type_interval(start, end)
@@ -885,7 +933,7 @@ class MRRTrans (Transformer):
         if max is None:
             return {_int(min)}
         else:
-            return set(range(_int(min), _int(max)+1))
+            return set(range(_int(min), _int(max) + 1))
 
     def init_all(self):
         return None
@@ -893,8 +941,7 @@ class MRRTrans (Transformer):
     def actdecl(self, tags, *args):
         if tags is not None:
             line = tags.line
-            tags = tuple(ts for t in tags.value.split(",")
-                         if (ts := t.strip()))
+            tags = tuple(ts for t in tags.value.split(",") if (ts := t.strip()))
         else:
             line = args[0].line
         left, right, quanti = [], [], {}
@@ -906,8 +953,12 @@ class MRRTrans (Transformer):
             elif isinstance(arg, dict):
                 quanti.update(arg)
             else:
-                _assert(arg is None or isinstance(arg, str), line, None,
-                        f"invalid condition or assignment {arg}")
+                _assert(
+                    arg is None or isinstance(arg, str),
+                    line,
+                    None,
+                    f"invalid condition or assignment {arg}",
+                )
         return Action(line, left, right, tags or (), quantifier=quanti)
 
     def quantifier(self, op, *args):
@@ -936,8 +987,11 @@ class MRRTrans (Transformer):
         elif op.value == "*":
             return BinOp(var.line, var.column, var, "==", None)
         else:
-            _error(op.line, op.column + 1 - len(op.value),
-                   f"invalid condition {op.value!r}")
+            _error(
+                op.line,
+                op.column + 1 - len(op.value),
+                f"invalid condition {op.value!r}",
+            )
 
     def var(self, name, index, at):
         if at is None:
@@ -946,8 +1000,15 @@ class MRRTrans (Transformer):
             locrel, locname, locidx = "outer", None, None
         else:
             locrel, locname, locidx = at
-        return VarUse(name.line, name.column + 1 - len(name.value), name.value,
-                      index, locrel, locname, locidx)
+        return VarUse(
+            name.line,
+            name.column + 1 - len(name.value),
+            name.value,
+            index,
+            locrel,
+            locname,
+            locidx,
+        )
 
     def at_inner(self, name, index):
         return "inner", name.value, index
@@ -980,18 +1041,21 @@ class MRRTrans (Transformer):
 
     def assignment_short(self, var, op):
         if op == "++":
-            return Assignment(var.line, var.column,
-                              var, BinOp(var.line, var.column, var, "+", 1))
+            return Assignment(
+                var.line, var.column, var, BinOp(var.line, var.column, var, "+", 1)
+            )
         elif op == "--":
-            return Assignment(var.line, var.column,
-                              var, BinOp(var.line, var.column, var, "-", 1))
+            return Assignment(
+                var.line, var.column, var, BinOp(var.line, var.column, var, "-", 1)
+            )
         elif op == "+":
             return Assignment(var.line, var.column, var, 1)
         elif op == "-":
             return Assignment(var.line, var.column, var, 0)
         elif op == "~":
-            return Assignment(var.line, var.column,
-                              var, BinOp(var.line, var.column, 1, "-", var))
+            return Assignment(
+                var.line, var.column, var, BinOp(var.line, var.column, 1, "-", var)
+            )
         elif op == "*":
             return Assignment(var.line, var.column, var, None)
         else:
@@ -1007,7 +1071,7 @@ class MRRIndenter(Indenter):
     tab_len = 4
 
 
-def parse_src(src, *defs):
+def parse_src(src, *defs, pattern=False):
     vardef = {}
     for d in defs:
         try:
@@ -1015,9 +1079,13 @@ def parse_src(src, *defs):
             vardef[v] = t
         except Exception:
             vardef[d] = None
-    parser = Lark_StandAlone(transformer=MRRTrans(), postlex=MRRIndenter())
+    if pattern:
+        LS = Lark_StandAlone_Pattern
+    else:
+        LS = Lark_StandAlone
+    parser = LS(transformer=MRRTrans(), postlex=MRRIndenter())
     return parser.parse(cpp(src, **vardef))
 
 
-def parse(path, *defs):
-    return parse_src(open(path).read(), *defs)
+def parse(path, *defs, pattern=False):
+    return parse_src(open(path).read(), *defs, pattern=pattern)

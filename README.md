@@ -104,6 +104,7 @@ First, you should install all the dependencies:
 - [pytl](https://github.com/fpom/pytl) (latest version)
 - [pyits model-checker](https://forge.ibisc.univ-evry.fr/cthomas/pyits_model_checker) (latest version)
 - [ptnet](https://github.com/fpom/cunf-ptnet-py3) (latest version)
+- LuaLaTex that is included in most [LaTeX](https://www.latex-project.org) distributions
 
 Then, run `python setup.py install` as usual, or `pip install git+https://github.com/fpom/ecco.git` to install directly from the [GitHub repository](https://github.com/fpom/ecco).
 
@@ -160,4 +161,4 @@ This program is free software: you can redistribute it and/or modify it under th
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 See the GNU Lesser General Public License for more details.
 
-You should have received a copy of the GNU Lesser General Public License along with this program.  If not, see [https://www.gnu.org/licenses](https://www.gnu.org/licenses/).
+You should have received a copy of the GNU Lesser General Public License along with this program. If not, see [https://www.gnu.org/licenses](https://www.gnu.org/licenses/).

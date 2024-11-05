@@ -2,7 +2,7 @@ FROM ubuntu:latest
 RUN apt-get -y update
 RUN apt-get -y upgrade
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata apt-utils
-RUN apt-get -y install --no-install-recommends gcc-11 g++-11 make graphviz python3 python3-dev python3-pip python3-venv openjdk-8-jre-headless git nodejs npm wget
+RUN apt-get -y install --no-install-recommends gcc-11 g++-11 make graphviz python3 python3-dev python3-pip python3-venv openjdk-8-jre-headless git nodejs npm wget textlive-full
 ADD --chown=root:root doc/* /etc/skel/doc/
 RUN apt-get -y autoclean
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 10

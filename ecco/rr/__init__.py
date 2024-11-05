@@ -2,7 +2,7 @@ import re
 
 import pandas as pd
 
-from ..mrr import Model as MRRModel, __extra__
+from ..mrr import Model as MRRModel, __extra__ as __xtra
 from ..cygraphs import Graph
 
 from colour import Color
@@ -81,27 +81,33 @@ class Model(MRRModel):
                 color = Color("#ffaaaa")
                 green = Color("#aaffaa")
                 vmax = max(var.domain)
-                color.hue = (color.hue * (vmax - vinit)
-                             + green.hue * vinit) / vmax
+                color.hue = (color.hue * (vmax - vinit) + green.hue * vinit) / vmax
                 color = color.get_hex_l()
-                nodes.append({"node": vname,
-                              "location": ".".join(path),
-                              "kind": "variable",
-                              "info": str(var),
-                              "shape": "ellipse",
-                              "color": color})
+                nodes.append(
+                    {
+                        "node": vname,
+                        "location": ".".join(path),
+                        "kind": "variable",
+                        "info": str(var),
+                        "shape": "ellipse",
+                        "color": color,
+                    }
+                )
             for kind in ("constraint", "rule"):
                 if not constraints and kind == "constraint":
                     continue
                 for act in getattr(loc, f"{kind}s"):
                     # each action is a node
-                    nodes.append({"node": act.name,
-                                  "location": ".".join(path),
-                                  "kind": kind,
-                                  "info": str(act),
-                                  "shape": "rectangle",
-                                  "color": ("#aaaaff" if kind == "rule"
-                                            else "#ffaaff")})
+                    nodes.append(
+                        {
+                            "node": act.name,
+                            "location": ".".join(path),
+                            "kind": kind,
+                            "info": str(act),
+                            "shape": "rectangle",
+                            "color": ("#aaaaff" if kind == "rule" else "#ffaaff"),
+                        }
+                    )
                     left, right, assign, read = set(), set(), {}, {}
                     for con in act.left:
                         # read variables
@@ -115,16 +121,19 @@ class Model(MRRModel):
                             tgt = ".".join(p + [v.name])
                             right.add(tgt)
                             assign[tgt] = int(str(ass.value))
-                        for p, v in getattr(ass.value, "vars",
-                                            lambda _: [])(path):
+                        for p, v in getattr(ass.value, "vars", lambda _: [])(path):
                             # also read variables, skip if has no method vars
                             left.add(".".join(p + [v.name]))
                     for v in left - right:
                         # readonly => empty arrowless arc
-                        edges.append({"src": v,
-                                      "dst": act.name,
-                                      "get": "*" if read[v] else "o",
-                                      "set": "-"})
+                        edges.append(
+                            {
+                                "src": v,
+                                "dst": act.name,
+                                "get": "*" if read[v] else "o",
+                                "set": "-",
+                            }
+                        )
                     for v in right:
                         # written => arrowed arc labelled with assigned value
                         if v not in read:
@@ -133,18 +142,27 @@ class Model(MRRModel):
                             get = "*"
                         else:
                             get = "o"
-                        edges.append({"src": v,
-                                      "dst": act.name,
-                                      "get": get,
-                                      "set": "*" if assign[v] else "o"})
-        opts = dict(nodes_shape="shape",
-                    nodes_fill_color="color",
-                    edges_label="",
-                    edges_source_tip="set",
-                    edges_target_tip="get",
-                    inspect_nodes=["kind", "location", "info"],
-                    inspect_edges=[])
+                        edges.append(
+                            {
+                                "src": v,
+                                "dst": act.name,
+                                "get": get,
+                                "set": "*" if assign[v] else "o",
+                            }
+                        )
+        opts = dict(
+            nodes_shape="shape",
+            nodes_fill_color="color",
+            edges_label="",
+            edges_source_tip="set",
+            edges_target_tip="get",
+            inspect_nodes=["kind", "location", "info"],
+            inspect_edges=[],
+        )
         opts.update(opt)
         nodes = pd.DataFrame.from_records(nodes, index=["node"])
         edges = pd.DataFrame.from_records(edges, index=["src", "dst"])
         return Graph(nodes, edges, **opts)
+
+
+__extra__ = __xtra
