@@ -12715,13 +12715,13 @@ static PyObject *__pyx_pf_4ecco_3mrr_3lts_3LTS_14var_ne(struct __pyx_obj_4ecco_3
  *         return self.var_lt(var, val) | self.var_gt(var, val)
  * 
  *     def __call__(LTS self, dict values):             # <<<<<<<<<<<<<<
- *         """Build a set of states from a a partial valuation `values`.
+ *         """Build a set of states from a partial valuation `values`.
  * 
  */
 
 /* Python wrapper */
 static PyObject *__pyx_pw_4ecco_3mrr_3lts_3LTS_17__call__(PyObject *__pyx_v_self, PyObject *__pyx_args, PyObject *__pyx_kwds); /*proto*/
-PyDoc_STRVAR(__pyx_doc_4ecco_3mrr_3lts_3LTS_16__call__, "Build a set of states from a a partial valuation `values`.\n\n        The variables valuated in `values` will range on the given values,\n        intersected with their actual domain. Variables that are not given in\n        `values` will range on their domain.\n\n        Arguments:\n         - `dict values`: map variable names to values\n\n        Return: a `ddd.sdd` holding the specified states\n        ");
+PyDoc_STRVAR(__pyx_doc_4ecco_3mrr_3lts_3LTS_16__call__, "Build a set of states from a partial valuation `values`.\n\n        The variables valuated in `values` will range on the given values,\n        intersected with their actual domain. Variables that are not given in\n        `values` will range on their domain.\n\n        Arguments:\n         - `dict values`: map variable names to values\n\n        Return: a `ddd.sdd` holding the specified states\n        ");
 #if CYTHON_UPDATE_DESCRIPTOR_DOC
 struct wrapperbase __pyx_wrapperbase_4ecco_3mrr_3lts_3LTS_16__call__;
 #endif
@@ -13405,7 +13405,7 @@ static PyObject *__pyx_pf_4ecco_3mrr_3lts_3LTS_16__call__(struct __pyx_obj_4ecco
  *         return self.var_lt(var, val) | self.var_gt(var, val)
  * 
  *     def __call__(LTS self, dict values):             # <<<<<<<<<<<<<<
- *         """Build a set of states from a a partial valuation `values`.
+ *         """Build a set of states from a partial valuation `values`.
  * 
  */
 

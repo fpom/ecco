@@ -10,3 +10,4 @@ doc/termites/
 pyrightconfig.json
 .envrc
 /.venv
+ecco.egg-info
