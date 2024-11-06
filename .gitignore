@@ -11,3 +11,5 @@ pyrightconfig.json
 .envrc
 /.venv
 ecco.egg-info
+*.so
+/scratch

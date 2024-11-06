@@ -26,7 +26,7 @@ RUN echo 'export LD_LIBRARY_PATH=/usr/local/ecco.venv/lib' >> /etc/profile.d/ecc
 WORKDIR /usr/local/ecco.venv
 RUN wget -nv https://github.com/fpom/pyddd/raw/master/libDDD.tar.gz && tar xzf libDDD.tar.gz && rm libDDD.tar.gz
 RUN wget -nv https://github.com/fpom/pyits/raw/master/libITS.tar.gz && tar xzf libITS.tar.gz && rm libITS.tar.gz
-RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyter networkx pandas numpy bqplot colour bitarray sympy cython tatsu==5.5.0 psutil prince pydot python-igraph ipycytoscape unidecode scikit-learn typeguard rich[jupyter]
+RUN pip3 install --no-cache-dir --upgrade setuptools wheel jupyter networkx pandas numpy bqplot colour bitarray sympy cython tatsu==5.5.0 psutil prince pydot python-igraph ipycytoscape unidecode scikit-learn typeguard rich[jupyter] frozendict
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pytl.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/cunf-ptnet-py3.git
 RUN pip3 install --no-cache-dir git+https://github.com/fpom/pyddd.git

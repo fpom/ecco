@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from functools import cache, cached_property, reduce
 from operator import or_
-from typing import Self, Optional
+from typing import Self, Optional, Mapping
 
 from . import Model, Action, Variable, ActionKind
 from . import Expression as _Expression
@@ -56,9 +56,13 @@ class Expression(_Expression):
         solver.add(z3.ForAll([z3.Int(v) for v in self.vars], self.zexpr))
         return solver.check() == z3.sat
 
-    def sub(self, assign: dict[str, Self]) -> Self:
+    def sub(self, assign: Mapping[str, Self | int]) -> Self:
         zexpr = z3.substitute(
-            self.zexpr, *((z3.Int(v), x.zexpr) for v, x in assign.items())
+            self.zexpr,
+            *(
+                (z3.Int(v), z3.IntVal(x) if isinstance(x, int) else x.zexpr)
+                for v, x in assign.items()
+            ),
         )
         return self.__class__(zexpr)
 
@@ -70,7 +74,7 @@ class Expression(_Expression):
         return solver
 
     @classmethod
-    def sat(cls, dom: dict[str, frozenset[int]], *exprs: Self) -> bool:
+    def sat(cls, dom: Mapping[str, frozenset[int]], *exprs: Self) -> bool:
         return cls.solver(dom, *exprs).check() == z3.sat
 
     @cached_property
@@ -80,6 +84,17 @@ class Expression(_Expression):
             return "!="
         else:
             return name
+
+    @cached_property
+    def bool(self) -> bool:
+        return bool(z3.simplify(self.zexpr))
+
+    @cached_property
+    def int(self) -> int:
+        return z3.simplify(self.zexpr).as_long()
+
+    def __str__(self) -> str:
+        return str(self.zexpr)
 
 
 __all__ = ["Model", "Action", "Expression", "Variable", "ActionKind"]

@@ -8,12 +8,13 @@ from typing import (
     Self,
     Union,
     Optional,
+    Mapping,
     get_origin,
     get_args,
 )
 from abc import ABC, abstractmethod
 from inspect import isclass
-from functools import reduce, cache, cached_property
+from functools import reduce, cached_property
 from operator import or_
 
 import pandas as pd
@@ -72,7 +73,7 @@ class Record:
                 if get_origin(typ) is Union:
                     opt = True
                     typ = get_args(typ)[0]
-                if (org := get_origin(typ)) in (tuple, frozenset, dict):
+                if (org := get_origin(typ)) in (tuple, frozenset, dict, Mapping):
                     yield field.name, opt, org, get_args(typ)[0]
                 else:
                     yield field.name, opt, None, object
@@ -81,13 +82,13 @@ class Record:
         for name, _, typ, _ in self._fields():
             if (val := getattr(self, name)) is None:
                 pass
-            elif typ is dict:
+            elif isinstance(val, dict):
                 self.__dict__[name] = frozendict(val)
             elif typ in (tuple, frozenset) and not isinstance(val, typ):
                 self.__dict__[name] = typ(val)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], **impl: type["Record"]) -> Self:
+    def from_dict(cls, data: Mapping[str, Any], **impl: type["Record"]) -> Self:
         """Build a new `Record` instance from its `dict` serialiation.
 
         Args:
@@ -194,7 +195,7 @@ class Expression(Record, ABC):
         """Names of all the variables involved in the expression."""
 
     @abstractmethod
-    def sub(self, assign: dict[str, Self]) -> Self: ...
+    def sub(self, assign: Mapping[str, Self | int]) -> Self: ...
 
     @cached_property
     @abstractmethod
@@ -206,11 +207,22 @@ class Expression(Record, ABC):
 
     @classmethod
     @abstractmethod
-    def sat(cls, dom: dict[str, frozenset[int]], *exprs: Self) -> bool: ...
+    def sat(cls, dom: Mapping[str, frozenset[int]], *exprs: Self) -> bool: ...
 
     @cached_property
     @abstractmethod
     def op(self) -> str: ...
+
+    @cached_property
+    @abstractmethod
+    def bool(self) -> bool: ...
+
+    @cached_property
+    @abstractmethod
+    def int(self) -> int: ...
+
+    @abstractmethod
+    def __str__(self) -> str: ...
 
 
 @dataclass(frozen=True, eq=True, order=True)
@@ -227,12 +239,17 @@ class Action(Record):
 
     name: str
     guard: tuple[Expression, ...]
-    assign: dict[str, Expression]
+    assign: Mapping[str, Expression]
     tags: frozenset[str]
     kind: ActionKind
 
     def __repr__(self):
         return f"<Action {self.name!r}>"
+
+    def __str__(self):
+        g = ", ".join(str(x) for x in self.guard)
+        a = ", ".join(f"{v} := {x}" for v, x in self.assign.items())
+        return f"{g} >> {a}"
 
     def inline(self, cons: Self, mod: "Model"):
         if self.kind != ActionKind.rule:
@@ -246,7 +263,7 @@ class Action(Record):
             yield self.__class__(
                 f"{self.name}+{cons.name}",
                 tuple(guard),
-                self.assign | cons.assign,
+                self.assign | cons.assign,  # type: ignore
                 self.tags | cons.tags,
                 self.kind,
             )

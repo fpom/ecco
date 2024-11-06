@@ -2,7 +2,7 @@ import re
 
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Self, Iterable
+from typing import Self, Iterable, Mapping
 
 from unidecode import unidecode
 
@@ -29,11 +29,11 @@ class Expr(Expression):
         else:
             return frozenset({self.name})
 
-    def sub(self, assign: dict[str, Self]) -> Self:
-        if (new := assign.get(self.name, None)) is not None:
-            return self.__class__(new.sign == self.sign)
-        else:
+    def sub(self, assign: Mapping[str, Self]) -> Self:
+        if self.name is None or self.name not in assign:
             return self
+        else:
+            return self.__class__(assign[self.name].sign == self.sign)
 
     @cached_property
     def neg(self):
@@ -46,7 +46,7 @@ class Expr(Expression):
     @classmethod
     def sat(
         cls,
-        dom: dict[str, frozenset],
+        dom: Mapping[str, frozenset],
         all: Iterable[Self] = (),
         iff: Iterable[tuple[Self, Self]] = (),
     ) -> bool:

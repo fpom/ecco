@@ -101,12 +101,10 @@ class Spec2Model:
         guard = []
         assign: dict[str, Expression] = {}
         for g in new.left:
-            z, v = self._load_expr(g, path[:-1], sidx)
-            guard.append(Expression(z, frozenset(v)))
+            guard.append(Expression(self._load_expr(g, path[:-1], sidx)))
         for ass in new.right:
             t = self._load_VarUse(ass.target, path[:-1], sidx)
-            z, v = self._load_expr(ass.value, path[:-1], sidx)
-            assign[t] = Expression(z, frozenset(v))
+            assign[t] = Expression(self._load_expr(ass.value, path[:-1], sidx))
         if vars:
             index = f"[{','.join(f'{k}={v}' for k, v in vars.items())}]"
             return Action(
@@ -133,19 +131,17 @@ class Spec2Model:
         "!=": operator.ne,
     }
 
-    def _load_expr(self, expr, path, sidx) -> tuple[z3.ExprRef, set[str]]:
+    def _load_expr(self, expr, path, sidx) -> z3.ExprRef:
         if isinstance(expr, BinOp):
-            le, lv = self._load_expr(expr.left, path, sidx)
-            re, rv = self._load_expr(expr.right, path, sidx)
-            return self._ops[expr.op](le, re), lv | rv
+            le = self._load_expr(expr.left, path, sidx)
+            re = self._load_expr(expr.right, path, sidx)
+            return self._ops[expr.op](le, re)
         elif isinstance(expr, VarUse):
-            v = self._load_VarUse(expr, path, sidx)
-            return z3.Int(v), {v}
+            return z3.Int(self._load_VarUse(expr, path, sidx))
         elif expr is None:
-            return z3.IntVal(-1), set()
+            return z3.IntVal(-1)
         else:
-            assert isinstance(expr, int)
-            return z3.IntVal(expr), set()
+            return z3.IntVal(int(expr))
 
     def _load_VarUse(self, expr, path, sidx):
         if expr.index is None:
