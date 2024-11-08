@@ -2,6 +2,13 @@
 from itertools import product
 from collections import Counter
 
+try:
+    from IPython.display import display  # type: ignore
+except Exception:
+    display = print
+
+from rich.text import Text as T
+
 
 class OpSig(dict):
     _keys: dict[str, str] = {"<": "<>", "<=": "<>", ">": "<>", ">=": "<>", "=": "=="}
@@ -106,6 +113,21 @@ class Match:
             t.extend([f"  {p}", f"  => {m}"])
         return "\n".join(t)
 
+    def _ipython_display_(self):
+        actions = []
+        for p, m in self.actions.items():
+            actions.append(f"{p}")
+            actions.append(f"=> {m}")
+        display(
+            T.from_markup("[blue b]with[/] ")
+            + T.from_markup("[dim],[/] ").join(
+                T(p) + T.from_markup(" [dim]=>[/] ") + T(m)
+                for p, m in self.variables.items()
+            )
+            + T("\n  ")
+            + T("\n  ").join(T(a) for a in actions),
+        )
+
     @classmethod
     def match(cls, pat, mod):
         _pat = pat.constraints + pat.rules
@@ -174,8 +196,8 @@ class Match:
                 found = False
                 for me in (g for g in mact.guard if g.vars == {mv}):
                     found = True
-                    ps = {d for d in dom if pe.sub({pv: d}).bool}
-                    ms = {d for d in dom if me.sub({mv: d}).bool}
+                    ps = {d for d in dom if pe.sub({pv: d})}
+                    ms = {d for d in dom if me.sub({mv: d})}
                     try:
                         cons.add(pv, ps, ms)
                         cons.add(pv, dom - ps, dom - ms)
@@ -191,8 +213,8 @@ class Match:
                 me = mact.assign[mv]
                 if me.vars:
                     return False
-                ps = {pe.int}
-                ms = {me.int}
+                ps = {int(pe)}
+                ms = {int(me)}
                 try:
                     cons.add(pv, ps, ms)
                     cons.add(pv, dom - ps, dom - ms)

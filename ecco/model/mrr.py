@@ -1,24 +1,168 @@
 import operator
 
-from typing import Optional
+from typing import Optional, Mapping, Self, Any, Callable
 from pathlib import Path
 
-import z3
+from . import (
+    Model as _Model,
+    Variable as _Variable,
+    Expression as _Expression,
+    Action as _Action,
+    ActionKind,
+    Record,
+)
 
-from .z3model import Model, Action, Expression, Variable, ActionKind
 from ..mrr.parser import parse_src, VarDecl, Action as ActDecl, BinOp, VarUse, Location
+from .print import Printable, Printer
+
+
+class Variable(Printable, _Variable):
+    def __txt__(self, **pmap):
+        prn = Printer(pmap)
+        if self.domain == {0, 1}:
+            if self.init == {0, 1} or self.init == {-1}:
+                init = prn.ini("*")
+            elif self.init == {0}:
+                init = prn.ini("-")
+            else:
+                init = prn.ini("+")
+            return prn[prn.decl(self.name), init, prn.cmt(f": {self.comment}")]
+        else:
+            if self.clock is None:
+                domain = prn.dom(f"{{{min(self.domain)}..{max(self.domain)}}}")
+            else:
+                domain = prn[
+                    prn.dom("{"),
+                    prn.clk(self.clock),
+                    prn.dom(f": {min(self.domain - {-1})}..{max(self.domain)}}}"),
+                ]
+            if self.init == self.domain or self.init == {-1}:
+                init = prn.ini("*")
+            elif len(self.init) == 1:
+                init = prn.ini(list(self.init)[0])
+            else:
+                init = prn[
+                    prn.ini(min(self.init)), prn.ini(".."), prn.ini(max(self.init))
+                ]
+            return prn[
+                domain,
+                " ",
+                prn.decl(self.name),
+                " ",
+                prn.op("="),
+                " ",
+                init,
+                prn.cmt(f": {self.comment}"),
+            ]
+
+
+class Expression(Printable, _Expression):
+    def __txt__(self, **pmap):
+        prn = Printer(pmap)
+        s = []
+        for i, (v, c) in enumerate(self.coeffs.items()):
+            p = prn.var(v)
+            if i and c > 0:
+                s.append(prn.op("+"))
+            if c == 1:
+                s.append(p)
+            elif c == -1:
+                s.extend([prn.op("-"), p])
+            else:
+                s.extend([prn(c), p])
+        if self.op is None:
+            if self.const > 0:
+                if s:
+                    return prn[*s, prn.op("+"), prn(self.const)]
+                else:
+                    return prn(self.const)
+            elif self.const < 0:
+                return prn[*s, prn(self.const)]
+            elif not s:
+                return prn(self.const)
+            else:
+                return prn[*s]
+        elif not s:
+            return prn[prn(self.const), prn.op(self.op), prn(0)]
+        else:
+            return prn[*s, prn.op(self.op), prn(-self.const)]
+
+
+class Action(Printable, _Action):
+    def __txt__(self, **pmap):
+        prn = Printer(pmap)
+        if self.tags:
+            tags = [prn.tag("["), *(prn.tag(t) for t in self.tags), prn.tag("]")]
+        else:
+            tags = []
+        return prn[
+            *tags,
+            prn.join(", ", (g.__txt__(**pmap) for g in self.guard)),
+            prn.op(">>"),
+            prn.join(
+                ", ",
+                (
+                    prn[prn.var(v), prn.op("="), x.__txt__(**pmap)]
+                    for v, x in self.assign.items()
+                ),
+            ),
+            "  ",
+            prn.cmt(f"# {self.name}"),
+        ]
+
+
+class Model(Printable, _Model):
+    def __txt__(self, **pmap):
+        prn = Printer(pmap)
+        lines = [
+            prn.cmt(f"# loaded from {str(self.path)!r}"),
+            prn.hdr("variables:"),
+        ]
+        lines.extend(prn["  ", v.__txt__(**pmap)] for v in self.variables)
+        for attr in ["constraints", "rules"]:
+            if actions := getattr(self, attr):
+                lines.append(prn.hdr(f"{attr}:"))
+                lines.extend(prn["  ", a.__txt__(**pmap)] for a in actions)
+        return prn.join("\n", lines)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], **impl: type[Record]) -> Self:
+        impl = {
+            "Model": Model,
+            "Action": Action,
+            "Expression": Expression,
+            "Variable": Variable,
+        } | impl
+        return super().from_dict(data, **impl)
+
+    @classmethod
+    def from_spec(
+        cls, spec, path: Optional[str | Path] = None, source: Optional[str] = None
+    ) -> "Model":
+        return Spec2Model.from_spec(spec, path, source)
+
+    @classmethod
+    def from_source(
+        cls, source: str, *defs: str, path: Optional[str | Path] = None
+    ) -> "Model":
+        return Spec2Model.from_source(source, *defs, path=path)
+
+    @classmethod
+    def from_path(cls, path: str | Path, *defs: str) -> "Model":
+        return Spec2Model.from_path(path, *defs)
 
 
 class Spec2Model:
+    # FIXME: this class should be replaced by direct parsing
     def __init__(self) -> None:
         self.variables: list[Variable] = []
         self.actions: list[Action] = []
         self.clocks: dict[str, list[Variable]] = {}
 
     @classmethod
-    def _load_spec(
+    def from_spec(
         cls, spec, path: Optional[str | Path] = None, source: Optional[str] = None
-    ):
+    ) -> Model:
         loader = cls()
         loader._load_Location(spec, [], None)
         loader._make_ticks()
@@ -30,8 +174,10 @@ class Spec2Model:
         )
 
     @classmethod
-    def from_source(cls, source: str, *defs: str, path: Optional[str | Path] = None):
-        return cls._load_spec(parse_src(source, *defs), path, source)
+    def from_source(
+        cls, source: str, *defs: str, path: Optional[str | Path] = None
+    ) -> Model:
+        return cls.from_spec(parse_src(source, *defs), path, source)
 
     @classmethod
     def from_path(cls, path: str | Path, *defs: str) -> Model:
@@ -82,6 +228,7 @@ class Spec2Model:
             domain=frozenset(var.domain if var.clock is None else var.domain | {-1}),
             init=frozenset(init),
             comment=var.description,
+            clock=var.clock,
         )
 
     def _load_ActDecl(
@@ -101,10 +248,10 @@ class Spec2Model:
         guard = []
         assign: dict[str, Expression] = {}
         for g in new.left:
-            guard.append(Expression(self._load_expr(g, path[:-1], sidx)))
+            guard.append(self._load_expr(g, path[:-1], sidx))
         for ass in new.right:
             t = self._load_VarUse(ass.target, path[:-1], sidx)
-            assign[t] = Expression(self._load_expr(ass.value, path[:-1], sidx))
+            assign[t] = self._load_expr(ass.value, path[:-1], sidx)
         if vars:
             index = f"[{','.join(f'{k}={v}' for k, v in vars.items())}]"
             return Action(
@@ -131,17 +278,17 @@ class Spec2Model:
         "!=": operator.ne,
     }
 
-    def _load_expr(self, expr, path, sidx) -> z3.ExprRef:
+    def _load_expr(self, expr, path, sidx) -> Expression:
         if isinstance(expr, BinOp):
             le = self._load_expr(expr.left, path, sidx)
             re = self._load_expr(expr.right, path, sidx)
             return self._ops[expr.op](le, re)
         elif isinstance(expr, VarUse):
-            return z3.Int(self._load_VarUse(expr, path, sidx))
+            return Expression.v(self._load_VarUse(expr, path, sidx))
         elif expr is None:
-            return z3.IntVal(-1)
+            return Expression(-1)
         else:
-            return z3.IntVal(int(expr))
+            return Expression(int(expr))
 
     def _load_VarUse(self, expr, path, sidx):
         if expr.index is None:
@@ -165,10 +312,8 @@ class Spec2Model:
             guard = []
             assign = {}
             for var in variables:
-                z = z3.Int(var.name)
-                g = z < max(var.domain)
-                guard.append(Expression(g, frozenset({var.name})))
-                assign[var.name] = z3.If(z == -1, z3.IntVal(-1), z + 1)
+                guard.append(Expression.v(var.name) < max(var.domain))
+                assign[var.name] = Expression.v(var.name) + 1
             self.actions.append(
                 Action(name, tuple(guard), assign, frozenset(), ActionKind.tick)
             )
@@ -187,7 +332,7 @@ class Patt2Model(Spec2Model):
             size=None,
             clocks={},
         )
-        return cls._load_spec(spec, path, source)
+        return cls.from_spec(spec, path, source)
 
     def _load_ActDecl(
         self, act: ActDecl, path: list[str], kind: ActionKind, sidx: Optional[int]
