@@ -2,12 +2,9 @@
 from itertools import product
 from collections import Counter
 
-try:
-    from IPython.display import display  # type: ignore
-except Exception:
-    display = print
+from rich.text import Text
 
-from rich.text import Text as T
+from .record import Printable, Printer
 
 
 class OpSig(dict):
@@ -102,31 +99,46 @@ class ConsCons(dict):
                 self[var, p] = mod
 
 
-class Match:
+class Match(Printable):
     def __init__(self, actions, variables):
-        self.actions = dict(actions)
         self.variables = dict(variables)
-
-    def __str__(self):
-        t = ["with " + ", ".join(f"{p} => {m}" for p, m in self.variables.items())]
-        for p, m in self.actions.items():
-            t.extend([f"  {p}", f"  => {m}"])
-        return "\n".join(t)
-
-    def _ipython_display_(self):
-        actions = []
-        for p, m in self.actions.items():
-            actions.append(f"{p}")
-            actions.append(f"=> {m}")
-        display(
-            T.from_markup("[blue b]with[/] ")
-            + T.from_markup("[dim],[/] ").join(
-                T(p) + T.from_markup(" [dim]=>[/] ") + T(m)
-                for p, m in self.variables.items()
+        self._styles = {
+            ("var", m): Text.assemble(
+                Text(m, "blue bold"), Text(f":{p}", "dim bold blue")
             )
-            + T("\n  ")
-            + T("\n  ").join(T(a) for a in actions),
-        )
+            for p, m in self.variables.items()
+        }
+        self.actions = {}
+        modl = None
+        for pa, ma in dict(actions).items():
+            if modl is None:
+                vars = tuple(
+                    ma._mod.v[m].copy(name=p) for p, m in self.variables.items()
+                )
+                modl = pa._mod.copy(variables=vars)
+            npa = pa.copy()
+            npa.__dict__["_mod"] = modl
+            self.actions[npa] = ma
+
+    def __txt__(self, styles={}):
+        prn = Printer(styles)
+        _styles = self._styles | styles
+        with prn.match:
+            return (prn / "\n")(
+                Text("matched:", "red bold"),
+                *(prn["  ", p.__txt__(styles)] for p in self.actions.keys()),
+                prn[
+                    Text("with", "red bold"),
+                    " ",
+                    (prn / ", ")(
+                        prn[prn(p, "var"), prn(":", "op"), prn(m, "var")]
+                        for p, m in self.variables.items()
+                    ),
+                    " ",
+                    Text("as:", "red bold"),
+                ],
+                *(prn["  ", m.__txt__(_styles)] for m in self.actions.values()),
+            )
 
     @classmethod
     def match(cls, pat, mod):
@@ -196,8 +208,8 @@ class Match:
                 found = False
                 for me in (g for g in mact.guard if g.vars == {mv}):
                     found = True
-                    ps = {d for d in dom if pe.sub({pv: d})}
-                    ms = {d for d in dom if me.sub({mv: d})}
+                    ps = {d for d in dom if pe.sub({pv: d}).as_bool}
+                    ms = {d for d in dom if me.sub({mv: d}).as_bool}
                     try:
                         cons.add(pv, ps, ms)
                         cons.add(pv, dom - ps, dom - ms)
@@ -213,8 +225,8 @@ class Match:
                 me = mact.assign[mv]
                 if me.vars:
                     return False
-                ps = {int(pe)}
-                ms = {int(me)}
+                ps = {pe.as_int}
+                ms = {me.as_int}
                 try:
                     cons.add(pv, ps, ms)
                     cons.add(pv, dom - ps, dom - ms)

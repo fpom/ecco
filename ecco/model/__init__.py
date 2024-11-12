@@ -1,21 +1,11 @@
 import re
 import operator
 
-from dataclasses import dataclass, fields, field
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import (
-    Iterator,
-    Any,
-    Self,
-    Union,
-    Optional,
-    Mapping,
-    Iterable,
-    get_origin,
-    get_args,
-)
+from typing import Iterator, Self, Optional, Iterable
+from collections.abc import Mapping
 from collections import defaultdict
-from inspect import isclass
 from functools import reduce, cached_property, cache
 
 import pandas as pd
@@ -23,6 +13,8 @@ import sympy as sp
 import z3
 
 from frozendict import frozendict
+
+from .record import Record
 
 _re_digits = re.compile(r"(\d+)")
 
@@ -54,126 +46,6 @@ class ActionKind(StrEnum):
 
 class InlineError(Exception):
     pass
-
-
-@dataclass(frozen=True, eq=True, order=True)
-class Record:
-    """Base class for model elements."""
-
-    @classmethod
-    def _fields(cls) -> Iterator[tuple[str, bool, type | None, type]]:
-        """Enumerate all the fields of a `Record`.
-
-        Yields:
-            4-tuples whose items are:
-
-            - `name`: the name of the field
-            - `optional`: `True` if the field is optional, `False` otherwise
-            - `type`: if not `None`, the field is a container of class `type`
-            - `cls`: the type of the field
-        """
-        for field in fields(cls):
-            opt = False
-            typ = field.type
-            if isclass(typ):
-                yield field.name, opt, None, typ
-            else:
-                if get_origin(typ) is Union:
-                    opt = True
-                    typ = get_args(typ)[0]
-                if (org := get_origin(typ)) in (tuple, frozenset, dict, Mapping):
-                    yield field.name, opt, org, get_args(typ)[0]
-                else:
-                    yield field.name, opt, None, object
-
-    def __post_init__(self):
-        for name, _, typ, _ in self._fields():
-            if (val := getattr(self, name)) is None:
-                pass
-            elif isinstance(val, dict):
-                self.__dict__[name] = frozendict(val)
-            elif typ in (tuple, frozenset) and not isinstance(val, typ):
-                self.__dict__[name] = typ(val)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any], **impl: type["Record"]) -> Self:
-        """Build a new `Record` instance from its `dict` serialiation.
-
-        Args:
-            data: A `dict` holding a previously serialized `Record`.
-            impl: Concrete implementation of `Record` classes, in particular of `Expression`.
-
-        Returns:
-            A `Record` instance.
-
-        Raises:
-            ValueError: If some fields are missing in `data`.
-        """
-        args = {}
-        for name, opt, cont, typ in cls._fields():
-            val = data.get(name, None)
-            if val is None:
-                if not opt:
-                    raise ValueError(f"field '{cls.__name__}.{name}' cannot be empty")
-                continue
-            if issubclass(typ, Record):
-                typ = impl.get(typ.__name__, typ)
-                if cont is None:
-                    args[name] = typ.from_dict(val, **impl)
-                else:
-                    args[name] = cont(typ.from_dict(v, **impl) for v in val)
-            else:
-                if cont is None:
-                    args[name] = val
-                else:
-                    args[name] = cont(val)
-        return cls(**args)
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize a `Record` into a `dict`.
-
-        Returns:
-            A `dict` holding all the data from the `Record`.
-        """
-        d = {}
-        for name, opt, cont, typ in self._fields():
-            val = getattr(self, name)
-            if val is None and opt:
-                continue
-            if not issubclass(typ, Record):
-                if cont is None:
-                    d[name] = val
-                else:
-                    d[name] = list(val)
-            elif cont is None:
-                d[name] = val.to_dict()
-            else:
-                d[name] = [v.to_dict() for v in val]
-        return d
-
-    def copy(self, **repl) -> Self:
-        """Copy a `Record`, replacing some of its fields.
-
-        Args:
-            repl: Fields to be replaced, given by name and value.
-
-        Returns:
-            A new `Record` instance.
-        """
-        args = {}
-        for name, _, cont, typ in self._fields():
-            val = repl.get(name, getattr(self, name, None))
-            if issubclass(typ, Record):
-                if cont is None:
-                    args[name] = val.copy()
-                else:
-                    args[name] = cont(v.copy() for v in val)
-            else:
-                if cont is None:
-                    args[name] = val
-                else:
-                    args[name] = cont(val)
-        return self.__class__(**args)
 
 
 @dataclass(frozen=True, eq=True, order=True)
@@ -256,40 +128,6 @@ class Expression(Record):
         )
         if self.op not in (None, "<", "<=", "==", "!=", ">=", ">"):
             raise ValueError(f"invalid operator {self.op!r}")
-
-    def __str__(self) -> str:
-        """
-        >>> print(Expression(3, {'a': 1, 'b': -1, 'c': 2, 'd': -2}))
-        a-b+2c-2d+3
-        >>> print(Expression(3, {'a': 1, 'b': -1, 'c': 2, 'd': -2}, ">"))
-        a-b+2c-2d > -3
-        >>> print(Expression(3, {}, ">"))
-        3 > 0
-        """
-        s = []
-        for i, (v, c) in enumerate(self.coeffs.items()):
-            if i and c > 0:
-                s.append("+")
-            if c == 1:
-                s.append(v)
-            elif c == -1:
-                s.append(f"-{v}")
-            else:
-                s.append(f"{c}{v}")
-        s = "".join(s)
-        if self.op is None:
-            if self.const > 0:
-                return f"{s}+{self.const}"
-            elif self.const < 0:
-                return f"{s}{self.const}"
-            elif not s:
-                return f"{self.const}"
-            else:
-                return s
-        elif not s:
-            return f"{self.const} {self.op} 0"
-        else:
-            return f"{s} {self.op} {-self.const}"
 
     @classmethod
     def v(cls, var: str):
@@ -400,20 +238,21 @@ class Expression(Record):
             raise ValueError("not a Boolean expression")
         return _PYOPS[self.op](self.const, 0)
 
-    @cache
-    def __int__(self) -> int:
+    # FIXME: __int__ instead this methods interacts with __eq__ and causes errors
+    @tested_cached_property
+    def as_int(self) -> int:
         """Get value of a constant-valuated integer expression.
 
         Raises:
             ValueError: When not a constant expression, or not an integer expression.
 
-        >>> int(Expression.c("a + 2 - a"))
+        >>> Expression.c("a + 2 - a").as_int
         2
-        >>> int(Expression.c("a + 1"))
+        >>> Expression.c("a + 1").as_int
         Traceback (most recent call last):
         ...
         ValueError: not a constant expression
-        >>> int(Expression.c("a > 0"))
+        >>> Expression.c("a > 0").as_int
         Traceback (most recent call last):
         ...
         ValueError: not an integer expression
@@ -424,8 +263,9 @@ class Expression(Record):
             raise ValueError("not a constant expression")
         return self.const
 
-    @cache
-    def __bool__(self) -> bool:
+    # FIXME: __bool__ instead this methods interacts with __eq__ and causes errors
+    @tested_cached_property
+    def as_bool(self) -> bool:
         """Get value of a constant-valuated expression as a Boolean.
 
         Note that for an integer expression `expr`, this is equivalent to `bool(int(expr))`.
@@ -433,15 +273,15 @@ class Expression(Record):
         Raises:
             ValueError: When not a constant expression.
 
-        >>> bool(Expression.c("a + 2 - a > 0"))
+        >>> Expression.c("a + 2 - a > 0").as_bool
         True
-        >>> bool(Expression.c("a + 2 - a < 0"))
+        >>> Expression.c("a + 2 - a < 0").as_bool
         False
-        >>> bool(Expression(2))
+        >>> Expression(2).as_bool
         True
-        >>> bool(Expression(0))
+        >>> Expression(0).as_bool
         False
-        >>> bool(Expression.c("a + 1"))
+        >>> Expression.c("a + 1").as_bool
         Traceback (most recent call last):
         ...
         ValueError: not a constant expression
@@ -898,6 +738,16 @@ class Model(Record):
     actions: tuple[Action, ...]
     path: Optional[str] = None
     source: Optional[str] = None
+
+    def __post_init__(self):
+        for var in self.variables:
+            var.__dict__["_mod"] = self
+        for act in self.actions:
+            act.__dict__["_mod"] = self
+            for g in act.guard:
+                g.__dict__["_mod"] = self
+            for x in act.assign.values():
+                x.__dict__["_mod"] = self
 
     @tested_cached_property
     def vars(self) -> frozenset[str]:

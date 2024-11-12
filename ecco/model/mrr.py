@@ -1,129 +1,184 @@
 import operator
 
-from typing import Optional, Mapping, Self, Any, Callable
+from typing import Optional, Mapping, Self, Any
 from pathlib import Path
 
+from rich.text import Text
+
+from ..mrr.parser import parse_src, VarDecl, Action as ActDecl, BinOp, VarUse, Location
+from .record import Record, Printer
 from . import (
     Model as _Model,
     Variable as _Variable,
     Expression as _Expression,
     Action as _Action,
     ActionKind,
-    Record,
 )
 
-from ..mrr.parser import parse_src, VarDecl, Action as ActDecl, BinOp, VarUse, Location
-from .print import Printable, Printer
+_mrr_styles = {
+    ("decl", "domain"): "magenta",
+    ("decl", "domain", "clock"): "bold",
+    ("decl", "init", "+"): "green bold",
+    ("decl", "init", "-"): "red bold",
+    ("decl", "init", "*"): "yellow bold",
+    ("decl", "var"): "bold",
+    ("expr", "op"): "",
+    ("expr", "+"): "green",
+    ("expr", "-"): "red",
+    ("action", "op", ">>"): Text(" >> ", "bold red"),
+    ("action", "tag"): "cyan",
+    ("action", "assign", "+"): "green",
+    ("action", "assign", "-"): "red",
+    ("action", "assign", "*"): "yellow",
+    ("comment",): "dim",
+    ("header",): "bold red",
+}
 
 
-class Variable(Printable, _Variable):
-    def __txt__(self, **pmap):
-        prn = Printer(pmap)
-        if self.domain == {0, 1}:
-            if self.init == {0, 1} or self.init == {-1}:
-                init = prn.ini("*")
-            elif self.init == {0}:
-                init = prn.ini("-")
+class Variable(_Variable):
+    def __txt__(self, styles={}):
+        prn = Printer(_mrr_styles | styles)
+        with prn.decl:
+            if self.domain == {0, 1}:
+                with prn.init:
+                    if self.init == {0, 1} or self.init == {-1}:
+                        init = prn("*")
+                    elif self.init == {0}:
+                        init = prn("-")
+                    else:
+                        init = prn("+")
+                return (prn / "")(
+                    prn(self.name, "var"),
+                    init,
+                    prn(f": {self.comment}", "comment"),
+                )
             else:
-                init = prn.ini("+")
-            return prn[prn.decl(self.name), init, prn.cmt(f": {self.comment}")]
-        else:
-            if self.clock is None:
-                domain = prn.dom(f"{{{min(self.domain)}..{max(self.domain)}}}")
-            else:
-                domain = prn[
-                    prn.dom("{"),
-                    prn.clk(self.clock),
-                    prn.dom(f": {min(self.domain - {-1})}..{max(self.domain)}}}"),
+                with prn.domain:
+                    if self.clock is None:
+                        domain = prn(f"{{{min(self.domain)}..{max(self.domain)}}}")
+                    else:
+                        domain = (prn / "")(
+                            "{",
+                            prn(self.clock, "clock"),
+                            f": {min(self.domain - {-1})}..{max(self.domain)}",
+                            "}",
+                        )
+                with prn.init:
+                    if self.init == self.domain or self.init == {-1}:
+                        init = prn("*")
+                    elif len(self.init) == 1:
+                        init = prn(list(self.init)[0])
+                    else:
+                        init = prn(f"{min(self.init)}..{max(self.init)}")
+                return prn[
+                    domain,
+                    " ",
+                    prn(self.name, "var"),
+                    " ",
+                    prn("=", "op"),
+                    " ",
+                    init,
+                    prn(f": {self.comment}", "comment"),
                 ]
-            if self.init == self.domain or self.init == {-1}:
-                init = prn.ini("*")
-            elif len(self.init) == 1:
-                init = prn.ini(list(self.init)[0])
+
+
+class Expression(_Expression):
+    def __txt__(self, styles={}):
+        prn = Printer(_mrr_styles | styles)
+        with prn.expr:
+            if (
+                len(self.vars) == 1
+                and (d := self._mod.v.get(var := list(self.vars)[0]))
+                and d.domain == {0, 1}
+            ):
+                if self.const == -1:
+                    return prn[prn(var, "var"), prn("+")]
+                else:
+                    return prn[prn(var, "var"), prn("-")]
+            s = []
+            for i, (v, c) in enumerate(self.coeffs.items()):
+                p = prn(v, "var")
+                if i and c > 0:
+                    s.append(prn("+", "op"))
+                if c == 1:
+                    s.append(p)
+                elif c == -1:
+                    s.extend([prn("-", "op"), p])
+                else:
+                    s.extend([prn(c), p])
+            if self.op is None:
+                if self.const > 0:
+                    if s:
+                        return prn[*s, prn("+", "op"), prn(self.const)]
+                    else:
+                        return prn(self.const)
+                elif self.const < 0:
+                    return prn[*s, prn(self.const)]
+                elif not s:
+                    return prn(self.const)
+                else:
+                    return prn[*s]
+            elif not s:
+                return prn[prn(self.const), prn(self.op, "op"), prn(0)]
             else:
-                init = prn[
-                    prn.ini(min(self.init)), prn.ini(".."), prn.ini(max(self.init))
-                ]
+                return prn[*s, prn(self.op, "op"), prn(-self.const)]
+
+
+class Action(_Action):
+    def __txt__(self, styles={}):
+        prn = Printer(_mrr_styles | styles)
+        with prn.action:
+            if self.tags:
+                with prn.tag:
+                    tags = [prn("["), *(prn(t) for t in self.tags), prn("]")]
+            else:
+                tags = []
+            with prn.assign:
+                assign = []
+                for v, x in self.assign.items():
+                    if not x.vars and (d := self._mod.v.get(v)) and d.domain == {0, 1}:
+                        assign.append(prn[prn(v, "var"), prn("+" if x.const else "-")])
+                    elif not x.vars and x.const == -1:
+                        assign.append(prn[prn(v, "var"), prn("*")])
+                    elif {v} == x.vars:
+                        if x.const == 1:
+                            assign.append(prn[prn(v, "var"), prn("++", "op")])
+                        elif x.const == -1:
+                            assign.append(prn[prn(v, "var"), prn("--", "op")])
+                        else:
+                            s = "-" if x.const < 0 else "+"
+                            c = -x.const if x.const < 0 else x.const
+                            assign.append(
+                                prn[prn(v, "var"), prn(f"{s}=", "op"), prn(c)]
+                            )
+                    else:
+                        assign.append(
+                            prn[prn(v, "var"), prn("=", "op"), x.__txt__(styles)]
+                        )
             return prn[
-                domain,
-                " ",
-                prn.decl(self.name),
-                " ",
-                prn.op("="),
-                " ",
-                init,
-                prn.cmt(f": {self.comment}"),
+                *tags,
+                " " if self.tags else "",
+                (prn / ", ")(g.__txt__(styles) for g in self.guard),
+                prn(">>", "op"),
+                (prn / ", ")(assign),
+                "  ",
+                prn(f"# {self.name}", "comment"),
             ]
 
 
-class Expression(Printable, _Expression):
-    def __txt__(self, **pmap):
-        prn = Printer(pmap)
-        s = []
-        for i, (v, c) in enumerate(self.coeffs.items()):
-            p = prn.var(v)
-            if i and c > 0:
-                s.append(prn.op("+"))
-            if c == 1:
-                s.append(p)
-            elif c == -1:
-                s.extend([prn.op("-"), p])
-            else:
-                s.extend([prn(c), p])
-        if self.op is None:
-            if self.const > 0:
-                if s:
-                    return prn[*s, prn.op("+"), prn(self.const)]
-                else:
-                    return prn(self.const)
-            elif self.const < 0:
-                return prn[*s, prn(self.const)]
-            elif not s:
-                return prn(self.const)
-            else:
-                return prn[*s]
-        elif not s:
-            return prn[prn(self.const), prn.op(self.op), prn(0)]
-        else:
-            return prn[*s, prn.op(self.op), prn(-self.const)]
-
-
-class Action(Printable, _Action):
-    def __txt__(self, **pmap):
-        prn = Printer(pmap)
-        if self.tags:
-            tags = [prn.tag("["), *(prn.tag(t) for t in self.tags), prn.tag("]")]
-        else:
-            tags = []
-        return prn[
-            *tags,
-            prn.join(", ", (g.__txt__(**pmap) for g in self.guard)),
-            prn.op(">>"),
-            prn.join(
-                ", ",
-                (
-                    prn[prn.var(v), prn.op("="), x.__txt__(**pmap)]
-                    for v, x in self.assign.items()
-                ),
-            ),
-            "  ",
-            prn.cmt(f"# {self.name}"),
-        ]
-
-
-class Model(Printable, _Model):
-    def __txt__(self, **pmap):
-        prn = Printer(pmap)
+class Model(_Model):
+    def __txt__(self, styles={}):
+        prn = Printer(_mrr_styles | styles)
         lines = [
-            prn.cmt(f"# loaded from {str(self.path)!r}"),
-            prn.hdr("variables:"),
+            prn(f"# loaded from {str(self.path)!r}", "comment"),
+            prn("variables:", "header"),
         ]
-        lines.extend(prn["  ", v.__txt__(**pmap)] for v in self.variables)
+        lines.extend(prn["  ", v.__txt__(styles)] for v in self.variables)
         for attr in ["constraints", "rules"]:
             if actions := getattr(self, attr):
-                lines.append(prn.hdr(f"{attr}:"))
-                lines.extend(prn["  ", a.__txt__(**pmap)] for a in actions)
-        return prn.join("\n", lines)
+                lines.append(prn(f"{attr}:", "header"))
+                lines.extend(prn["  ", a.__txt__(styles)] for a in actions)
+        return (prn / "\n")(lines)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], **impl: type[Record]) -> Self:
