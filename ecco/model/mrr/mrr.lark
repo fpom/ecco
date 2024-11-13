@@ -1,0 +1,55 @@
+%import common.WS_INLINE
+%ignore WS_INLINE
+%declare _INDENT _DEDENT
+
+clocks: "clocks" ":" _NL _INDENT clockdecl+ _DEDENT
+clockdecl: NAME ":" DESC _NL
+
+model: [variables] location* [constraints] [rules]
+variables: "variables" ":" _NL _INDENT vardecl+ _DEDENT
+constraints: "constraints" ":" _NL _INDENT actdecl+ _DEDENT
+rules: "rules" ":" _NL _INDENT actdecl+ _DEDENT
+location: "location" NAME ["[" NAT "]"] ":" _NL _INDENT model _DEDENT
+
+vardecl: type NAME "=" init ":" DESC _NL     -> vardecl_long
+    | NAME UNOP ":" DESC _NL                 -> vardecl_short
+
+type: simple_type ["[" NAT "]"]
+simple_type: "bool"                   -> type_bool
+    | "{" NAME ":" INT ".." INT "}"   -> type_clock
+    | "{" INT ".." INT "}"            -> type_interval
+
+init: simple_init
+    | "(" simple_init ("," simple_init)* ")"   -> init_seq
+simple_init: INT [".." INT] ("|" simple_init)* -> init_int
+    | "*"                                      -> init_all
+
+actdecl: ["[" TAGS "]"] condition ("," condition)* ">>" assignment ("," assignment)* [quantifier] _NL
+condition: (var | INT) CMP (var | INT)   -> condition_long
+    | var UNOP                           -> condition_short
+assignment: var ASSIGN (var | INT | "*") -> assignment_long
+    | var UNOP                           -> assignment_short
+var: NAME ["[" index "]"] ["@" atloc]
+atloc: AT                    -> at_outer
+    | NAME ["[" index "]"]   -> at_inner
+index: NAT
+    | NAME [BINOP NAT]
+
+quantifier: "for" QUANTI NAME ("," NAME)* ("," quantifier)*
+
+QUANTI: /all|any/
+
+NAME: /[a-z][a-z0-9]*/i
+NAT:  /[0-9]+/
+INT:  /[+-]?[0-9]+/
+
+CMP: ("==" | "<=" | "<" | ">=" | ">" | "!=")
+ASSIGN: /[+-]?=/
+UNOP:  ("++" | "--" | "+" | "-" | "*" | "~")
+BINOP:  ("+" | "-")
+AT: "@"
+
+TAGS: /[^\]\n\r]+/
+DESC: /[^\n\r]+/
+
+_NL: /(\r?\n[\t ]*)+/
