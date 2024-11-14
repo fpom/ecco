@@ -1,4 +1,5 @@
 import re
+import ast
 import subprocess
 import warnings
 
@@ -46,15 +47,6 @@ def cpp(text, **var):
 #
 
 
-class MRRIndenter(Indenter):  # type: ignore
-    NL_type = "_NL"  # type: ignore
-    OPEN_PAREN_types = []  # type: ignore
-    CLOSE_PAREN_types = []  # type: ignore
-    INDENT_type = "_INDENT"  # type: ignore
-    DEDENT_type = "_DEDENT"  # type: ignore
-    tab_len = 4  # type: ignore
-
-
 def _error(line, column, message, errcls=ParseError) -> NoReturn:
     if column is not None:
         err = errcls(f"[{line}:{column}] {message}")
@@ -99,8 +91,17 @@ class AST(dict):
 
 
 #
-# Lark handler
+# Lark handlers
 #
+
+
+class MRRIndenter(Indenter):  # type: ignore
+    NL_type = "_NL"  # type: ignore
+    OPEN_PAREN_types = []  # type: ignore
+    CLOSE_PAREN_types = []  # type: ignore
+    INDENT_type = "_INDENT"  # type: ignore
+    DEDENT_type = "_DEDENT"  # type: ignore
+    tab_len = 4  # type: ignore
 
 
 @v_args(inline=True)
@@ -167,12 +168,10 @@ class MRRTrans(Transformer):
         return AST(domain={0, 1})
 
     def type_clock(self, clock, start, end):
-        dom = self.type_interval(start, end)
-        dom.domain.add(-1)
-        return AST(clock=clock.value) | dom
+        return AST(clock=clock.value) | self.type_interval(start, end, {-1})
 
-    def type_interval(self, start, end):
-        return AST(domain=set(range(_int(start), _int(end) + 1)))
+    def type_interval(self, start, end, more=set()):
+        return AST(domain=set(range(_int(start), _int(end) + 1)) | more)
 
     def init(self, init):
         return init
@@ -273,6 +272,7 @@ class MRRTrans(Transformer):
                 kind="assign",
                 line=target.line,
                 column=target.column,
+                target=target,
                 value=AST(
                     kind="expr",
                     line=target.line,
@@ -287,6 +287,7 @@ class MRRTrans(Transformer):
                 kind="assign",
                 line=target.line,
                 column=target.column,
+                target=target,
                 value={"+": 1, "-": 0, "*": None}[op.value],
             )
         elif op.value == "~":
@@ -294,6 +295,7 @@ class MRRTrans(Transformer):
                 kind="assign",
                 line=target.line,
                 column=target.column,
+                target=target,
                 value=AST(
                     kind="expr",
                     line=target.line,
@@ -306,20 +308,40 @@ class MRRTrans(Transformer):
         else:
             _error(op.line, op.column, "invalid assignment {op.value!r}")
 
-    def var(self, name, index=None, at=None):
+    def var(self, left, mark=None, right=None):
+        if mark is None:
+            return left
+        elif mark == "@":
+            assert right is not None
+            return left | AST(locrel="inner", locname=right.name, locidx=right.index)
+        else:
+            assert mark == "." and right is not None
+            return right | AST(
+                line=left.line,
+                column=left.column,
+                locrel="inner",
+                locname=left.name,
+                locidx=left.index,
+            )
+
+    def mark(self, mark):
+        return mark.value
+
+    def up_var(self, var):
+        return var | {"locrel": "outer"}
+
+    def name_idx(self, name, index=None):
+        return name | {"index": index}
+
+    def name(self, name):
         return AST(
             kind="var",
             line=name.line,
-            column=name.column + 1 - len(name.value),
-            name=name.value,
-            index=index,
-        ) | (at or {})
-
-    def at_outer(self, _):
-        return AST(locrel="outer")
-
-    def at_inner(self, name, index):
-        return AST(locrel="inner", locbame=name.value, locidx=index)
+            column=name.column,
+            name=ast.literal_eval(name.value)
+            if name.value[0] in ("'", '"')
+            else name.value,
+        )
 
     def index(self, idx, op=None, inc=None):
         return AST(

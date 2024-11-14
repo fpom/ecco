@@ -29,9 +29,12 @@ condition: (var | INT) CMP (var | INT)   -> condition_long
     | var UNOP                           -> condition_short
 assignment: var ASSIGN (var | INT | "*") -> assignment_long
     | var UNOP                           -> assignment_short
-var: NAME ["[" index "]"] ["@" atloc]
-atloc: AT                    -> at_outer
-    | NAME ["[" index "]"]   -> at_inner
+var: name_idx [mark name_idx]
+    | ".." name_idx              -> up_var
+    | name_idx "@@"              -> up_var
+mark: AT | DOT
+name_idx: name ["[" index "]"]
+name: NAME | SQNAME | DQNAME
 index: NAT
     | NAME [BINOP NAT]
 
@@ -39,7 +42,12 @@ quantifier: "for" QUANTI NAME ("," NAME)* ("," quantifier)*
 
 QUANTI: /all|any/
 
+AT: "@"
+DOT: "."
+
 NAME: /[a-z][a-z0-9]*/i
+DQNAME: /"[a-z][^\[\]"\n]*"/i
+SQNAME: /'[a-z][^\[\]'\n]*'/i
 NAT:  /[0-9]+/
 INT:  /[+-]?[0-9]+/
 
@@ -47,7 +55,6 @@ CMP: ("==" | "<=" | "<" | ">=" | ">" | "!=")
 ASSIGN: /[+-]?=/
 UNOP:  ("++" | "--" | "+" | "-" | "*" | "~")
 BINOP:  ("+" | "-")
-AT: "@"
 
 TAGS: /[^\]\n\r]+/
 DESC: /[^\n\r]+/
