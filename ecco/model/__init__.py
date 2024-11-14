@@ -238,7 +238,7 @@ class Expression(Record):
             raise ValueError("not a Boolean expression")
         return _PYOPS[self.op](self.const, 0)
 
-    # FIXME: __int__ instead this methods interacts with __eq__ and causes errors
+    # FIXME: __int__ instead of this methods interacts with __eq__ and causes errors
     @tested_cached_property
     def as_int(self) -> int:
         """Get value of a constant-valuated integer expression.
@@ -263,7 +263,7 @@ class Expression(Record):
             raise ValueError("not a constant expression")
         return self.const
 
-    # FIXME: __bool__ instead this methods interacts with __eq__ and causes errors
+    # FIXME: __bool__ instead of this methods interacts with __eq__ and causes errors
     @tested_cached_property
     def as_bool(self) -> bool:
         """Get value of a constant-valuated expression as a Boolean.
@@ -730,14 +730,12 @@ class Model(Record):
     Attributes:
         variables: The variables of the model.
         actions: The actions of the model.
-        path: The name of the source file from which the model was built.
-        source: The source code from which the model was built.
+        meta: Meta-information organized by keys.
     """
 
     variables: tuple[Variable, ...]
     actions: tuple[Action, ...]
-    path: Optional[str] = None
-    source: Optional[str] = None
+    meta: Mapping[str, str] = field(default_factory=frozendict)
 
     def __post_init__(self):
         for var in self.variables:

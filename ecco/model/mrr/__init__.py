@@ -1,11 +1,12 @@
 import operator
 
-from typing import Optional, Mapping, Self, Any
+from typing import Mapping, Self, Any, Iterator
 from pathlib import Path
+from itertools import product
 
 from rich.text import Text
 
-from .parser import ModelParser, PatternParser
+from .parser import ModelParser, PatternParser, AST
 from ..record import Record, Printer
 from .. import (
     Model as _Model,
@@ -169,8 +170,9 @@ class Action(_Action):
 class Model(_Model):
     def __txt__(self, styles={}):
         prn = Printer(_mrr_styles | styles)
+        path = self.meta.get("path", "<string>")
         lines = [
-            prn(f"# loaded from {str(self.path)!r}", "comment"),
+            prn(f"# loaded from {path!r}", "comment"),
             prn("variables:", "header"),
         ]
         lines.extend(prn["  ", v.__txt__(styles)] for v in self.variables)
@@ -191,189 +193,257 @@ class Model(_Model):
         return super().from_dict(data, **impl)
 
     @classmethod
-    def from_spec(
-        cls, spec, path: Optional[str | Path] = None, source: Optional[str] = None
-    ) -> "Model":
-        return Spec2Model.from_spec(spec, path, source)
+    def from_source(cls, _source: str, **_vardefs: str) -> "Model":
+        return AST2Model.from_source(_source, **_vardefs)
 
     @classmethod
-    def from_source(
-        cls, source: str, *defs: str, path: Optional[str | Path] = None
-    ) -> "Model":
-        return Spec2Model.from_source(source, *defs, path=path)
+    def from_path(cls, _path: str | Path, *_vardefs: str) -> "Model":
+        return AST2Model.from_path(_path, *_vardefs)
+
+
+#
+# AST to Model/Pattern
+#
+
+
+class AST2Model:
+    _binops = {
+        None: (lambda i, _: i),
+        "+": operator.add,
+        "-": operator.sub,
+        "*": operator.mul,
+        "==": operator.eq,
+        "!=": operator.ne,
+        "<": operator.lt,
+        "<=": operator.le,
+        ">": operator.gt,
+        ">=": operator.ge,
+    }
 
     @classmethod
-    def from_path(cls, path: str | Path, *defs: str) -> "Model":
-        return Spec2Model.from_path(path, *defs)
+    def from_source(cls, _source: str, **_vardefs: str) -> Model:
+        ast = ModelParser.parse_src(_source, **_vardefs)
+        return cls.from_ast(ast)
+
+    @classmethod
+    def from_path(cls, _path: str | Path, **_vardefs: str) -> Model:
+        ast = ModelParser.parse(_path, **_vardefs)
+        mod = cls.from_ast(ast)
+        mod.__dict__["meta"] = mod.meta | {"path": str(_path)}
+        return mod
+
+    @classmethod
+    def from_ast(cls, ast) -> Model:
+        loader = cls()
+        loader._load_loc(ast)
+        loader._make_ticks()
+        return Model(
+            variables=tuple(loader.variables),
+            actions=tuple(loader.actions),
+        )
+
+    def __init__(self):
+        self.variables: list[Variable] = []
+        self.actions: list[Action] = []
+        self.clocks: dict[str, list[Variable]] = {}
+        self.shapes: dict[str, int | None] = {}
+
+    def _load_loc(self, loc, path=[], selfidx=None):
+        # load clocks
+        self.clocks.update({c: [] for c in loc.clocks or ()})
+        # load local variables
+        for var in loc.variables:
+            self.shapes[".".join([*path, var.name])] = var.shape
+            if var.shape is not None:
+                for i in range(var.shape):
+                    self.variables.append(
+                        self._load_decl(var, [*path, f"{var.name}[{i}]"], i)
+                    )
+            else:
+                self.variables.append(self._load_decl(var, [*path, var.name]))
+            if var.clock is not None:
+                self.clocks[var.clock].extend(self.variables[-(var.shape or 1) :])
+        # load sub-locations (before actions to resolve nested variables)
+        for sub in loc.locations:
+            self.shapes[".".join([*path, sub.name])] = sub.shape
+            if sub.shape is not None:
+                for i in range(sub.shape):
+                    self._load_loc(sub, [*path, f"{sub.name}[{i}]"], i)
+            else:
+                self._load_loc(sub, [*path, sub.name], None)
+        # load local actions
+        for i, act in enumerate(loc.constraints or (), start=1):
+            self.actions.extend(
+                self._load_act(act, [*path, f"C{i}"], ActionKind.cons, selfidx)
+            )
+        for i, act in enumerate(loc.rules or (), start=1):
+            self.actions.extend(
+                self._load_act(act, [*path, f"R{i}"], ActionKind.rule, selfidx)
+            )
+
+    def _load_decl(self, var, path, idx=None):
+        if isinstance(var.init, tuple):
+            assert idx is not None and 0 <= idx < len(var.init)
+            init = var.init[idx]
+        else:
+            assert isinstance(var.init, set)
+            init = var.init
+        return Variable(
+            name=".".join(path),
+            domain=frozenset(var.domain),
+            init=frozenset(init),
+            comment=var.desc,
+            clock=var.clock,
+        )
+
+    def _load_act(self, act, path, kind, selfidx=None) -> Iterator[Action]:
+        actname = ".".join(path)
+        path = path[:-1]
+        for new, idx in self._expand_any(act, path):
+            if selfidx is not None:
+                idx["self"] = selfidx
+            yield Action(
+                name=actname
+                + (
+                    f"[{','.join(f'{k}={v}' for k, v in sorted(idx.items()))}]"
+                    if idx
+                    else ""
+                ),
+                guard=tuple(self._load_expr(g, path, idx) for g in new.guard),
+                assign={
+                    self._load_var(a.target, path, idx): Expression(-1)
+                    if a.value is None
+                    else self._load_expr(a.value, path, idx)
+                    for a in new.assign
+                },
+                tags=new.tags,
+                kind=kind,
+            )
+
+    def _expand_any(self, act, path) -> Iterator[tuple[AST, dict[str, int]]]:
+        doms = self._load_doms(act, path)
+        if not act.quant:
+            yield self._expand_all(act, doms), {}
+        else:
+            quant = [v for v, q in act.quant.items() if q == "any"]
+            for combi in product(*(doms[v] for v in quant)):
+                yield self._expand_all(act, doms), dict(zip(quant, combi))
+
+    def _load_doms(self, act, path):
+        doms = {}
+        for var in act.search({"kind": "var"}):
+            if var.index is not None:
+                idx = var.index.left
+                vfn = ".".join([*path, var.name])
+                if idx == "self":
+                    continue
+                elif idx not in act.quant:
+                    var.index.error(f"unquantified index {idx!r}")
+                elif vfn not in self.shapes:
+                    var.error(f"undeclared variable {var.name!r}")
+                inc = self._binops[var.index.op](0, var.index.right)
+                dom = set(range(inc, inc + self.shapes[vfn]))
+                if idx not in doms:
+                    doms[idx] = dom
+                else:
+                    doms[idx].intersection_update(dom)
+            if var.locidx is not None:
+                assert var.locrel == "inner"
+                idx = var.locidx.left
+                lfn = ".".join([*path, var.locname])
+                if idx == "self":
+                    continue
+                elif idx not in act.quant:
+                    var.locidx.error(f"unquantified index {idx!r}")
+                elif lfn not in self.shapes:
+                    var.error(f"undeclared location {var.name!r}")
+                inc = self._binops[var.locidx.op](0, var.locidx.right)
+                dom = set(range(inc, inc + self.shapes[lfn]))
+                if idx not in doms:
+                    doms[idx] = dom
+                else:
+                    doms[idx].intersection_update(dom)
+        return doms
+
+    def _expand_all(self, act, doms) -> AST:
+        quant = [v for v, q in act.quant.items() if q == "all"]
+        expand = {"guard": [], "assign": []}
+        for attr, side in expand.items():
+            for a in getattr(act, attr):
+                new = [a]
+                for v in quant:
+                    if any(True for _ in a.search({"kind": "expr", "left": v})) or any(
+                        True for _ in a.search({"kind": "expr", "right": v})
+                    ):
+                        new = [
+                            x.sub({"kind": "expr", "left": v}, {"left": d}).sub(
+                                {"kind": "expr", "right": v}, {"right": d}
+                            )
+                            for x in new
+                            for d in doms[v]
+                        ]
+                side.extend(new)
+        return act | expand
+
+    def _load_var(self, var, path, idxvals) -> str:
+        if var.index is None:
+            name = var.name
+        else:
+            idx = self._load_idx(var.index, idxvals)
+            name = f"{var.name}[{idx}]"
+        if var.locrel is None:
+            path = path + [name]
+        elif var.locrel == "inner":
+            if var.locidx is None:
+                path = path + [var.locname, name]
+            else:
+                idx = self._load_idx(var.locidx, idxvals)
+                path = path + [f"{var.locname}[{idx}]", name]
+        elif var.locrel == "outer":
+            path = path[:-1] + [name]
+        return ".".join(path)
+
+    def _load_idx(self, idx, idxvals):
+        if isinstance(idx, int):
+            return idx
+        elif isinstance(idx, str):
+            if (val := idxvals.get(idx)) is not None:
+                return val
+        elif idx.kind == "expr":
+            if idx.op is None:
+                return self._load_idx(idx.left, idxvals)
+            else:
+                return self._binops[idx.op](
+                    self._load_idx(idx.left, idxvals),
+                    self._load_idx(idx.right, idxvals),
+                )
+
+    def _load_expr(self, expr, path, idxvals) -> Expression:
+        if isinstance(expr, int):
+            return Expression(expr)
+        elif expr.kind == "var":
+            return Expression(0, {self._load_var(expr, path, idxvals): 1})
+        elif expr.op is None:
+            return self._load_expr(expr.left, path, idxvals)
+        else:
+            return self._binops[expr.op](
+                self._load_expr(expr.left, path, idxvals),
+                self._load_expr(expr.right, path, idxvals),
+            )
+
+    def _make_ticks(self):
+        for clock, variables in self.clocks.items():
+            name = f"{clock}.tick"
+            guard = []
+            assign = {}
+            for var in variables:
+                guard.append(Expression.v(var.name) < max(var.domain))
+                assign[var.name] = Expression.v(var.name) + 1
+            self.actions.append(
+                Action(name, tuple(guard), assign, frozenset(), ActionKind.tick)
+            )
 
 
-# class Spec2Model:
-#     # FIXME: this class should be replaced by direct parsing
-#     def __init__(self) -> None:
-#         self.variables: list[Variable] = []
-#         self.actions: list[Action] = []
-#         self.clocks: dict[str, list[Variable]] = {}
-#
-#     @classmethod
-#     def from_spec(
-#         cls, spec, path: Optional[str | Path] = None, source: Optional[str] = None
-#     ) -> Model:
-#         loader = cls()
-#         loader._load_Location(spec, [], None)
-#         loader._make_ticks()
-#         return Model(
-#             tuple(loader.variables),
-#             tuple(loader.actions),
-#             str(path or "<string>"),
-#             source,
-#         )
-#
-#     @classmethod
-#     def from_source(
-#         cls, source: str, *defs: str, path: Optional[str | Path] = None
-#     ) -> Model:
-#         return cls.from_spec(parse_src(source, *defs), path, source)
-#
-#     @classmethod
-#     def from_path(cls, path: str | Path, *defs: str) -> Model:
-#         return cls.from_source(Path(path).read_text(), *defs, path=path)
-#
-#     def _load_Location(self, loc, path, sidx):
-#         # load clocks
-#         self.clocks.update({c: [] for c in loc.clocks})
-#         # load local variables
-#         for var in loc.variables:
-#             if var.size is not None:
-#                 for i in range(var.size):
-#                     self.variables.append(
-#                         self._load_VarDecl(var, path + [f"{var.name}[{i}]"], idx=i)
-#                     )
-#             else:
-#                 self.variables.append(self._load_VarDecl(var, path + [var.name]))
-#             if var.clock is not None:
-#                 self.clocks[var.clock].extend(self.variables[-(var.size or 1) :])
-#         # load local actions
-#         for i, act in enumerate(loc.constraints, start=1):
-#             self.actions.extend(
-#                 self._load_ActDecl(act, path + [f"C{i}"], ActionKind.cons, sidx)
-#             )
-#         for i, act in enumerate(loc.rules, start=1):
-#             self.actions.extend(
-#                 self._load_ActDecl(act, path + [f"R{i}"], ActionKind.rule, sidx)
-#             )
-#         # load sub-locations
-#         for sub in loc.locations:
-#             assert sub.name is not None
-#             if sub.size is not None:
-#                 for i in range(sub.size):
-#                     self._load_Location(sub, path + [f"{sub.name}[{i}]"], i)
-#             else:
-#                 self._load_Location(sub, path + [sub.name], None)
-#
-#     def _load_VarDecl(self, var: VarDecl, path: list[str], idx: Optional[int] = None):
-#         if var.init is None:
-#             init = {-1}
-#         elif idx is not None and isinstance(var.init, tuple):
-#             init = var.init[idx]
-#         else:
-#             assert isinstance(var.init, set)
-#             init = var.init
-#         return Variable(
-#             name=".".join(path),
-#             domain=frozenset(var.domain if var.clock is None else var.domain | {-1}),
-#             init=frozenset(init),
-#             comment=var.description,
-#             clock=var.clock,
-#         )
-#
-#     def _load_ActDecl(
-#         self, act: ActDecl, path: list[str], kind: ActionKind, sidx: Optional[int]
-#     ):
-#         for new, vars in act.expand_any():
-#             yield self._load_ActDecl_expanded(new, path, kind, sidx, vars)
-#
-#     def _load_ActDecl_expanded(
-#         self,
-#         new: ActDecl,
-#         path: list[str],
-#         kind: ActionKind,
-#         sidx: Optional[int],
-#         vars: dict[str, int],
-#     ):
-#         guard = []
-#         assign: dict[str, Expression] = {}
-#         for g in new.left:
-#             guard.append(self._load_expr(g, path[:-1], sidx))
-#         for ass in new.right:
-#             t = self._load_VarUse(ass.target, path[:-1], sidx)
-#             assign[t] = self._load_expr(ass.value, path[:-1], sidx)
-#         if vars:
-#             index = f"[{','.join(f'{k}={v}' for k, v in vars.items())}]"
-#             return Action(
-#                 ".".join(path) + index,
-#                 tuple(guard),
-#                 assign,
-#                 frozenset(new.tags),
-#                 kind,
-#             )
-#         else:
-#             return Action(
-#                 ".".join(path), tuple(guard), assign, frozenset(new.tags), kind
-#             )
-#
-#     _ops = {
-#         "+": operator.add,
-#         "-": operator.sub,
-#         "*": operator.mul,
-#         "<": operator.lt,
-#         ">": operator.gt,
-#         "<=": operator.le,
-#         ">=": operator.ge,
-#         "==": operator.eq,
-#         "!=": operator.ne,
-#     }
-#
-#     def _load_expr(self, expr, path, sidx) -> Expression:
-#         if isinstance(expr, BinOp):
-#             le = self._load_expr(expr.left, path, sidx)
-#             re = self._load_expr(expr.right, path, sidx)
-#             return self._ops[expr.op](le, re)
-#         elif isinstance(expr, VarUse):
-#             return Expression.v(self._load_VarUse(expr, path, sidx))
-#         elif expr is None:
-#             return Expression(-1)
-#         else:
-#             return Expression(int(expr))
-#
-#     def _load_VarUse(self, expr, path, sidx):
-#         if expr.index is None:
-#             name = expr.name
-#         else:
-#             name = f"{expr.name}[{sidx if expr.index == 'self' else expr.index}]"
-#         if expr.locrel is None:
-#             path = path + [name]
-#         elif expr.locrel == "inner":
-#             if expr.locidx is None:
-#                 path = path + [expr.locname, name]
-#             else:
-#                 path = path + [f"{expr.locname}[{expr.locidx}]", name]
-#         elif expr.locrel == "outer":
-#             path = path[:-1] + [name]
-#         return ".".join(path)
-#
-#     def _make_ticks(self):
-#         for clock, variables in self.clocks.items():
-#             name = f"{clock}.tick"
-#             guard = []
-#             assign = {}
-#             for var in variables:
-#                 guard.append(Expression.v(var.name) < max(var.domain))
-#                 assign[var.name] = Expression.v(var.name) + 1
-#             self.actions.append(
-#                 Action(name, tuple(guard), assign, frozenset(), ActionKind.tick)
-#             )
-#
-#
 # class Patt2Model(Spec2Model):
 #     @classmethod
 #     def from_source(cls, source: str, *defs: str, path: Optional[str | Path] = None):

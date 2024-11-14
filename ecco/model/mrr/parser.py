@@ -5,8 +5,8 @@ import warnings
 
 from typing import NoReturn
 from functools import reduce
-from itertools import chain
 from operator import or_
+from collections import defaultdict
 
 from .mrrparse import Indenter, Transformer, ParseError, Token, v_args
 from .mrrmodparse import Lark_StandAlone as LarkModelParser
@@ -19,7 +19,7 @@ from .mrrpatparse import Lark_StandAlone as LarkPatternParser
 _line_dir = re.compile(r'^#\s+([0-9]+)\s+"([^"]+)"[\s\d]*$')
 
 
-def cpp(text, **var):
+def cpp(text: str, **var: str) -> str:
     out = subprocess.run(
         ["cpp", "--traditional", *(f"-D{k}={v}" for k, v in var.items())],
         input=text,
@@ -88,6 +88,46 @@ class AST(dict):
 
     def __or__(self, other):
         return self.__class__(dict(self) | dict(other))
+
+    def error(self, message):
+        _error(self.line, self.column, message)
+
+    def search(self, match):
+        if all(self.get(k) == v for k, v in match.items()):
+            yield self
+        cls = self.__class__
+        for val in self.values():
+            if isinstance(val, cls):
+                yield from val.search(match)
+            elif isinstance(val, (tuple, list)):
+                for v in val:
+                    if isinstance(v, cls):
+                        yield from v.search(match)
+            elif isinstance(val, dict):
+                for v in val.values():
+                    if isinstance(v, cls):
+                        yield from v.search(match)
+
+    def sub(self, match, repl):
+        if all(self.get(k) == v for k, v in match.items()):
+            return self.__class__({k: repl.get(k, v) for k, v in self.items()})
+        else:
+            new, cls = {}, self.__class__
+            for key, val in self.items():
+                if isinstance(val, cls):
+                    new[key] = val.sub(match, repl)
+                elif isinstance(val, (tuple, list)):
+                    new[key] = type(val)(
+                        v.sub(match, repl) if isinstance(v, cls) else v for v in val
+                    )
+                elif isinstance(val, dict):
+                    new[key] = {
+                        k: v.sub(match, repl) if isinstance(v, cls) else v
+                        for k, v in val.items()
+                    }
+                else:
+                    new[key] = val
+            return cls(new)
 
 
 #
@@ -201,24 +241,20 @@ class MRRTrans(Transformer):
         return None
 
     def actdecl(self, *args):
-        if args and isinstance(args[0], Token):
-            tags, *args = args
-        else:
-            tags = AST(value="")
-        _assert(
-            all(a.kind in ("expr", "assign", "quant") for a in args),
-            args[0].line,
-            None,
-            "unexpected item",
-        )
+        parts = defaultdict(list)
+        for a in args:
+            parts[a.kind].append(a)
         return AST(
             kind="act",
             line=args[0].line,
-            tags=tuple(ts for t in (tags.value or "").split(",") if (ts := t.strip())),
-            guard=tuple(a for a in args if a.kind == "expr"),
-            assign=tuple(a for a in args if a.kind == "assign"),
-            quant=reduce(or_, (a.quant for a in args if a.kind == "quand"), {}),
+            tags=parts["tags"][0].tags if parts["tags"] else (),
+            guard=tuple(parts["expr"]),
+            assign=tuple(parts["assign"]),
+            quant=parts["quant"][0].quant if parts["quant"] else {},
         )
+
+    def tags(self, *args):
+        return AST(kind="tags", tags=tuple(a.value for a in args))
 
     def condition_long(self, left, op, right):
         line, column = left.line, left.column

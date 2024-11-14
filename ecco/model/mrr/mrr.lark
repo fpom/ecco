@@ -24,7 +24,8 @@ init: simple_init
 simple_init: INT [".." INT] ("|" simple_init)* -> init_int
     | "*"                                      -> init_all
 
-actdecl: ["[" TAGS "]"] condition ("," condition)* ">>" assignment ("," assignment)* [quantifier] _NL
+actdecl: ["[" tags "]"] condition ("," condition)* ">>" assignment ("," assignment)* [quantifier] _NL
+tags: TAG ("," TAG)*
 condition: (var | INT) CMP (var | INT)   -> condition_long
     | var UNOP                           -> condition_short
 assignment: var ASSIGN (var | INT | "*") -> assignment_long
@@ -46,8 +47,8 @@ AT: "@"
 DOT: "."
 
 NAME: /[a-z][a-z0-9]*/i
-DQNAME: /"[a-z][^\[\]"\n]*"/i
-SQNAME: /'[a-z][^\[\]'\n]*'/i
+DQNAME: /"[a-z][^\[\]"\n\r]*"/i
+SQNAME: /'[a-z][^\[\]'\n\r]*'/i
 NAT:  /[0-9]+/
 INT:  /[+-]?[0-9]+/
 
@@ -56,7 +57,7 @@ ASSIGN: /[+-]?=/
 UNOP:  ("++" | "--" | "+" | "-" | "*" | "~")
 BINOP:  ("+" | "-")
 
-TAGS: /[^\]\n\r]+/
+TAG: /[^\],\s\n\r]+/
 DESC: /[^\n\r]+/
 
 _NL: /(\r?\n[\t ]*)+/
