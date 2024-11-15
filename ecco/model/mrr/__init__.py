@@ -2,11 +2,11 @@ import operator
 
 from typing import Mapping, Self, Any, Iterator
 from pathlib import Path
-from itertools import product
+from itertools import product, chain
 
 from rich.text import Text
 
-from .parser import ModelParser, PatternParser, AST
+from .parser import ModelParser, PatternParser, AST, ParseError
 from ..record import Record, Printer
 from .. import (
     Model as _Model,
@@ -16,7 +16,16 @@ from .. import (
     ActionKind,
 )
 
+
+def _mrr_var(var):
+    if any(c in "[.]" for c in str(var)):
+        return Text.assemble('"', var, '"', style="blue")
+    else:
+        return Text.assemble(var, style="blue")
+
+
 _mrr_styles = {
+    ("var",): _mrr_var,
     ("decl", "domain"): "magenta",
     ("decl", "domain", "clock"): "bold",
     ("decl", "init", "+"): "green bold",
@@ -197,8 +206,8 @@ class Model(_Model):
         return AST2Model.from_source(_source, **_vardefs)
 
     @classmethod
-    def from_path(cls, _path: str | Path, *_vardefs: str) -> "Model":
-        return AST2Model.from_path(_path, *_vardefs)
+    def from_path(cls, _path: str | Path, **_vardefs: str) -> "Model":
+        return AST2Model.from_path(_path, **_vardefs)
 
 
 #
@@ -221,6 +230,64 @@ class AST2Model:
     }
 
     @classmethod
+    def check(cls, loc, locname=None, up={}, down={}, clocks=None):
+        if clocks is None:
+            clocks = set(loc.clocks or ())
+        _up = {}
+        for decl in loc.variables or ():
+            decl.ensure(
+                decl.clock is None or decl.clock in clocks,
+                f"clock {decl.clock} not declared",
+            )
+            decl.ensure(decl.name not in _up, "variable already declared locally")
+            _up[decl.name] = decl
+        for var in down.values():
+            cls._check_var(var, _up, f"{locname!r}")
+        _loc_down = {}
+        _loc_shape = {}
+        for sub in loc.locations or ():
+            _loc_down[sub.name] = {}
+            _loc_shape[sub.name] = sub.shape
+        for act in chain(loc.constraints or (), loc.rules or ()):
+            for var in act.search({"kind": "var"}):
+                if var.locrel is None:
+                    cls._check_var(var, _up, None)
+                elif var.locrel == "outer":
+                    var.ensure(locname is not None, "no outer location")
+                    cls._check_var(var, up, "outer location")
+                elif var.locrel == "inner":
+                    var.ensure(
+                        var.locname in _loc_down,
+                        f"inner location {var.locname!r} not declared",
+                    )
+                    var.ensure(
+                        var.locidx is None or _loc_shape[var.locname] is not None,
+                        "single location cannot be indexed",
+                    )
+                    var.ensure(
+                        _loc_shape[var.locname] is None or var.locidx is not None,
+                        "array location should be indexed",
+                    )
+                    _loc_down[var.locname].setdefault(var.name, var)
+                else:
+                    assert False, "should not occur, this is a bug"
+        for sub in loc.locations or ():
+            cls.check(sub, sub.name, _up, _loc_down[sub.name], clocks)
+
+    @classmethod
+    def _check_var(cls, var, scope, locname):
+        where = "locally" if locname is None else f"in {locname}"
+        var.ensure(var.name in scope, f"variable not declared {where}")
+        var.ensure(
+            var.index is None or scope[var.name].shape is not None,
+            "scalar variable cannot be indexed",
+        )
+        var.ensure(
+            scope[var.name].shape is None or var.index is not None,
+            "array variable should be indexed",
+        )
+
+    @classmethod
     def from_source(cls, _source: str, **_vardefs: str) -> Model:
         ast = ModelParser.parse_src(_source, **_vardefs)
         return cls.from_ast(ast)
@@ -234,9 +301,17 @@ class AST2Model:
 
     @classmethod
     def from_ast(cls, ast) -> Model:
-        loader = cls()
-        loader._load_loc(ast)
-        loader._make_ticks()
+        try:
+            cls.check(ast)
+            loader = cls()
+            loader._load_loc(ast)
+            loader._make_ticks()
+        except ParseError as err:
+            try:
+                srcline = ast.source[err.lin - 1]
+            except Exception:
+                srcline = None
+            raise ParseError(err.msg, err.lin, err.col, srcline)
         return Model(
             variables=tuple(loader.variables),
             actions=tuple(loader.actions),

@@ -3,12 +3,12 @@ import ast
 import subprocess
 import warnings
 
-from typing import NoReturn
+from typing import Iterator, Self
 from functools import reduce
 from operator import or_
 from collections import defaultdict
 
-from .mrrparse import Indenter, Transformer, ParseError, Token, v_args
+from .mrrparse import Indenter, Transformer, UnexpectedInput, Token, v_args
 from .mrrmodparse import Lark_StandAlone as LarkModelParser
 from .mrrpatparse import Lark_StandAlone as LarkPatternParser
 
@@ -47,33 +47,41 @@ def cpp(text: str, **var: str) -> str:
 #
 
 
-def _error(line, column, message, errcls=ParseError) -> NoReturn:
-    if column is not None:
-        err = errcls(f"[{line}:{column}] {message}")
-    else:
-        err = errcls(f"[{line}] {message}")
-    setattr(err, "line", line)
-    setattr(err, "column", column)
-    raise err
+class ParseError(Exception):
+    def __init__(self, message, line, column=None, src=None):
+        if column is None:
+            msg = f"[{line}] {message}"
+        else:
+            msg = f"[{line}:{column}] {message}"
+        if src is not None:
+            msg += f"\n{src}"
+            if column is not None:
+                msg += f"\n{' ' * (column - 1)}^^^"
+        super().__init__(msg)
+        self.msg = message
+        self.lin = line
+        self.col = column
+        self.src = src
 
-
-def _assert(test, line, column, message, errcls=ParseError):
-    if not test:
-        _error(line, column, message, errcls)
+    @classmethod
+    def ensure(cls, test, message, line, column=None, src=None):
+        if not test:
+            raise cls(message, line, column, src)
 
 
 def _int(tok, min=None, max=None, message="invalid int litteral"):
     try:
         val = int(tok.value)
-        if min is not None:
-            _assert(val >= min, tok.line, tok.column, message)
-        if max is not None:
-            _assert(val <= max, tok.line, tok.column, message)
-        return val
-    except ParseError:
-        raise
     except Exception:
-        _error(tok.line, tok.column, message)
+        raise ParseError(message, tok.line, tok.column)
+    else:
+        if min is None and tok.type == "NAT":
+            min = 0
+        if min is not None:
+            ParseError.ensure(val >= min, message, tok.line, tok.column)
+        if max is not None:
+            ParseError.ensure(val <= max, message, tok.line, tok.column)
+        return val
 
 
 class AST(dict):
@@ -89,10 +97,13 @@ class AST(dict):
     def __or__(self, other):
         return self.__class__(dict(self) | dict(other))
 
-    def error(self, message):
-        _error(self.line, self.column, message)
+    def error(self, message, src=None):
+        raise ParseError(message, self.line, self.column, src)
 
-    def search(self, match):
+    def ensure(self, check, message, src=None):
+        ParseError.ensure(check, message, self.line, self.column, src)
+
+    def search(self, match) -> Iterator[Self]:
         if all(self.get(k) == v for k, v in match.items()):
             yield self
         cls = self.__class__
@@ -172,11 +183,15 @@ class MRRTrans(Transformer):
     def rules(self, *args):
         return AST(kind="rules", rules=args)
 
-    def location(self, name, size, model):
+    def location(self, name, *args):
+        if len(args) == 1:
+            shape, model = None, args[0]
+        else:
+            shape, model = args
         return model | AST(
             line=name.line,
             name=name.value,
-            shape=None if size is None else _int(size, 1, None, "invalid array size"),
+            shape=None if shape is None else _int(shape, 1, None, "invalid array size"),
         )
 
     def vardecl_short(self, name, sign, desc):
@@ -190,9 +205,16 @@ class MRRTrans(Transformer):
         )
 
     def vardecl_long(self, typ, name, init, desc):
+        if init is None:
+            init = AST(init=typ.domain if typ.clock is None else {-1})
+        init.ensure(
+            not isinstance(init.init, tuple) or len(init.init) == typ.shape,
+            "wrong array init length",
+        )
+        init.init.intersection_update(typ.domain)
         return (
             typ
-            | (init or AST(init=typ.domain if typ.clock is None else {-1}))
+            | init
             | AST(
                 kind="decl",
                 line=name.line,
@@ -202,7 +224,11 @@ class MRRTrans(Transformer):
         )
 
     def type(self, typ, shape=None):
-        return typ | {"shape": None if shape is None else _int(shape)}
+        return typ | {
+            "shape": None
+            if shape is None
+            else _int(shape, min=1, message="invalid array size")
+        }
 
     def type_bool(self):
         return AST(domain={0, 1})
@@ -211,7 +237,7 @@ class MRRTrans(Transformer):
         return AST(clock=clock.value) | self.type_interval(start, end, {-1})
 
     def type_interval(self, start, end, more=set()):
-        return AST(domain=set(range(_int(start), _int(end) + 1)) | more)
+        return AST(domain=set(range(_int(start), _int(end, 1) + 1)) | more)
 
     def init(self, init):
         return init
@@ -267,11 +293,11 @@ class MRRTrans(Transformer):
 
     def condition_short(self, var, op):
         values = {"+": 1, "-": 0, "*": None}
-        _assert(
+        ParseError.ensure(
             op.value in values,
+            f"invalid condition {op.value!r}",
             var.line,
             var.column + 1 - len(op.value),
-            f"invalid condition {op.value!r}",
         )
         return AST(
             kind="expr",
@@ -342,7 +368,7 @@ class MRRTrans(Transformer):
                 ),
             )
         else:
-            _error(op.line, op.column, "invalid assignment {op.value!r}")
+            raise ParseError(f"invalid assignment {op.value!r}", op.line, op.column)
 
     def var(self, left, mark=None, right=None):
         if mark is None:
@@ -393,16 +419,16 @@ class MRRTrans(Transformer):
         q = {}
         for arg in args:
             if isinstance(arg, AST):
-                _assert(
+                ParseError.ensure(
+                    "multiple quantification",
                     not any(v in q for v in arg.quant),
                     arg.line,
                     arg.column,
-                    "multiple quantification",
                 )
                 q.update(arg.quant)
             else:
-                _assert(
-                    arg.value not in q, arg.line, arg.column, "multiple quantification"
+                ParseError.ensure(
+                    "multiple quantification", arg.value not in q, arg.line, arg.column
                 )
                 q[arg.value] = op.value
         return AST(kind="quant", line=op.line, column=op.column, quant=q)
@@ -447,11 +473,37 @@ class ModelParser:
         for d in defs:
             try:
                 v, t = d.split("=", 1)
-                vardef[v] = t
-            except Exception:
+            except ValueError:
                 vardef[d] = None
+            else:
+                vardef[v] = t
+        sourcelines = src.splitlines()
         parser = cls.Parser(transformer=cls.Transformer(), postlex=MRRIndenter())
-        return parser.parse(cpp(src, **vardef))
+        try:
+            ast = parser.parse(cpp(src, **vardef))
+        except UnexpectedInput as err:
+            try:
+                srcline = sourcelines[err.line - 1]
+            except Exception:
+                srcline = None
+            raise ParseError(
+                "unexpected input",
+                err.line,
+                err.column,
+                srcline,
+            ).with_traceback(err.__traceback__)
+        except ParseError as err:
+            try:
+                srcline = sourcelines[err.lin - 1]
+            except (TypeError, IndexError):
+                srcline = None
+            raise ParseError(err.msg, err.lin, err.col, srcline).with_traceback(
+                err.__traceback__
+            )
+        except Exception as err:
+            raise ParseError(str(err), 0).with_traceback(err.__traceback__)
+        ast["source"] = sourcelines
+        return ast
 
     @classmethod
     def parse(cls, path, *defs, **vardef):
