@@ -1,10 +1,12 @@
+import re
 import operator
 
 from typing import Mapping, Self, Any, Iterator
 from pathlib import Path
+from datetime import datetime
 from itertools import product, chain
 
-from rich.text import Text
+from rich.text import Text  # pyright: ignore
 
 from .parser import ModelParser, PatternParser, AST, ParseError
 from ..record import Record, Printer
@@ -46,7 +48,7 @@ _mrr_styles = {
 
 
 class Variable(_Variable):
-    def __txt__(self, styles={}):
+    def __txt__(self, styles={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
         with prn.decl:
             if self.domain == {0, 1}:
@@ -93,12 +95,12 @@ class Variable(_Variable):
 
 
 class Expression(_Expression):
-    def __txt__(self, styles={}):
+    def __txt__(self, styles={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
         with prn.expr:
             if (
                 len(self.vars) == 1
-                and (d := self._mod.v.get(var := list(self.vars)[0]))
+                and (d := self._mod.v.get(var := list(self.vars)[0]))  # pyright: ignore
                 and d.domain == {0, 1}
             ):
                 if self.const == -1:
@@ -135,7 +137,7 @@ class Expression(_Expression):
 
 
 class Action(_Action):
-    def __txt__(self, styles={}):
+    def __txt__(self, styles={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
         with prn.action:
             if self.tags:
@@ -146,7 +148,7 @@ class Action(_Action):
             with prn.assign:
                 assign = []
                 for v, x in self.assign.items():
-                    if not x.vars and (d := self._mod.v.get(v)) and d.domain == {0, 1}:
+                    if not x.vars and (d := self._mod.v.get(v)) and d.domain == {0, 1}:  # pyright: ignore
                         assign.append(prn[prn(v, "var"), prn("+" if x.const else "-")])
                     elif not x.vars and x.const == -1:
                         assign.append(prn[prn(v, "var"), prn("*")])
@@ -177,13 +179,21 @@ class Action(_Action):
 
 
 class Model(_Model):
-    def __txt__(self, styles={}):
+    def __txt__(self, styles={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
-        path = self.meta.get("path", "<string>")
-        lines = [
-            prn(f"# loaded from {path!r}", "comment"),
-            prn("variables:", "header"),
-        ]
+        lines = [prn("# === flattened model ===", "comment")]
+        if self.meta:
+            lines.append(prn("# meta information:", "comment"))
+            for key, val in self.meta.items():
+                if isinstance(val, (Path, str, int, bool, float)):
+                    txt = f"{val}"
+                elif isinstance(val, datetime):
+                    txt = val.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    txt = repr(val)
+                lines.append(prn(f"#  - {key}: {txt}", "comment"))
+        if self.variables:
+            lines.append(prn("variables:", "header"))
         lines.extend(prn["  ", v.__txt__(styles)] for v in self.variables)
         for attr in ["constraints", "rules"]:
             if actions := getattr(self, attr):
@@ -207,7 +217,37 @@ class Model(_Model):
 
     @classmethod
     def from_path(cls, _path: str | Path, **_vardefs: str) -> "Model":
+        if not isinstance(_path, Path):
+            _path = Path(_path)
         return AST2Model.from_path(_path, **_vardefs)
+
+
+class Pattern(Model):
+    def __txt__(self, styles={}):  # pyright: ignore
+        prn = Printer(_mrr_styles | styles)
+        lines = [prn("# === pattern ===", "comment")]
+        if self.meta:
+            lines.append(prn("# meta information:", "comment"))
+            for key, val in self.meta.items():
+                if isinstance(val, (Path, str, int, bool, float)):
+                    txt = f"{val}"
+                elif isinstance(val, datetime):
+                    txt = val.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    txt = repr(val)
+                lines.append(prn(f"#  - {key}: {txt}", "comment"))
+            lines.extend(a.__txt__(styles) for a in self.actions)
+        return (prn / "\n")(lines)
+
+    @classmethod
+    def from_source(cls, _source: str, **_vardefs: str) -> "Model":
+        return AST2Pattern.from_source(_source, **_vardefs)
+
+    @classmethod
+    def from_path(cls, _path: str | Path, **_vardefs: str) -> "Model":
+        if not isinstance(_path, Path):
+            _path = Path(_path)
+        return AST2Pattern.from_path(_path, **_vardefs)
 
 
 #
@@ -216,6 +256,9 @@ class Model(_Model):
 
 
 class AST2Model:
+    LarkParser = ModelParser
+    ModelClass = Model
+
     _binops = {
         None: (lambda i, _: i),
         "+": operator.add,
@@ -249,7 +292,7 @@ class AST2Model:
             _loc_down[sub.name] = {}
             _loc_shape[sub.name] = sub.shape
         for act in chain(loc.constraints or (), loc.rules or ()):
-            for var in act.search({"kind": "var"}):
+            for var in act.search({"kind": "var"}):  # pyright: ignore
                 if var.locrel is None:
                     cls._check_var(var, _up, None)
                 elif var.locrel == "outer":
@@ -289,18 +332,21 @@ class AST2Model:
 
     @classmethod
     def from_source(cls, _source: str, **_vardefs: str) -> Model:
-        ast = ModelParser.parse_src(_source, **_vardefs)
+        ast = cls.LarkParser.parse_src(_source, **_vardefs)
         return cls.from_ast(ast)
 
     @classmethod
-    def from_path(cls, _path: str | Path, **_vardefs: str) -> Model:
-        ast = ModelParser.parse(_path, **_vardefs)
-        mod = cls.from_ast(ast)
-        mod.__dict__["meta"] = mod.meta | {"path": str(_path)}
+    def from_path(cls, _path: Path, **_vardefs: str) -> Model:
+        ast = cls.LarkParser.parse(_path, **_vardefs)
+        mod = cls.from_ast(
+            ast,
+            path=_path,
+            timestamp=datetime.fromtimestamp(_path.stat().st_mtime),
+        )
         return mod
 
     @classmethod
-    def from_ast(cls, ast) -> Model:
+    def from_ast(cls, ast, **meta) -> Model:
         try:
             cls.check(ast)
             loader = cls()
@@ -312,9 +358,10 @@ class AST2Model:
             except Exception:
                 srcline = None
             raise ParseError(err.msg, err.lin, err.col, srcline)
-        return Model(
+        return cls.ModelClass(
             variables=tuple(loader.variables),
             actions=tuple(loader.actions),
+            meta=meta | {"locations": loader.locations},
         )
 
     def __init__(self):
@@ -322,8 +369,14 @@ class AST2Model:
         self.actions: list[Action] = []
         self.clocks: dict[str, list[Variable]] = {}
         self.shapes: dict[str, int | None] = {}
+        self.locations: dict[str, dict] = {}
 
     def _load_loc(self, loc, path=[], selfidx=None):
+        tree = self.locations
+        for p in path:
+            tree = tree[re.sub(r"\[\d*\]", "[]", p)]
+        for sub in loc.locations or ():
+            tree[sub.name if sub.shape is None else f"{sub.name}[]"] = {}
         # load clocks
         self.clocks.update({c: [] for c in loc.clocks or ()})
         # load local variables
@@ -384,14 +437,14 @@ class AST2Model:
                     if idx
                     else ""
                 ),
-                guard=tuple(self._load_expr(g, path, idx) for g in new.guard),
+                guard=tuple(self._load_expr(g, path, idx) for g in new.guard or ()),
                 assign={
                     self._load_var(a.target, path, idx): Expression(-1)
                     if a.value is None
                     else self._load_expr(a.value, path, idx)
-                    for a in new.assign
+                    for a in new.assign or ()
                 },
-                tags=new.tags,
+                tags=new.tags or frozenset(),
                 kind=kind,
             )
 
@@ -519,22 +572,13 @@ class AST2Model:
             )
 
 
-# class Patt2Model(Spec2Model):
-#     @classmethod
-#     def from_source(cls, source: str, *defs: str, path: Optional[str | Path] = None):
-#         spec = Location(
-#             line=1,
-#             variables=(),
-#             constraints=(),
-#             rules=parse_src(source, *defs, pattern=True),
-#             locations=(),
-#             name=None,
-#             size=None,
-#             clocks={},
-#         )
-#         return cls.from_spec(spec, path, source)
-#
-#     def _load_ActDecl(
-#         self, act: ActDecl, path: list[str], kind: ActionKind, sidx: Optional[int]
-#     ):
-#         yield self._load_ActDecl_expanded(act, path, kind, sidx, {})
+class AST2Pattern(AST2Model):
+    LarkParser = PatternParser
+    ModelClass = Pattern
+
+    @classmethod
+    def check(cls, loc, locname=None, up={}, down={}, clocks=None):
+        pass
+
+    def _make_ticks(self):
+        pass

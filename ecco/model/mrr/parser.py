@@ -3,7 +3,7 @@ import ast
 import subprocess
 import warnings
 
-from typing import Iterator, Self
+from typing import Iterator, Self, Any
 from functools import reduce
 from operator import or_
 from collections import defaultdict
@@ -103,7 +103,7 @@ class AST(dict):
     def ensure(self, check, message, src=None):
         ParseError.ensure(check, message, self.line, self.column, src)
 
-    def search(self, match) -> Iterator[Self]:
+    def search(self, match: dict[str, Any]) -> Iterator[Self]:
         if all(self.get(k) == v for k, v in match.items()):
             yield self
         cls = self.__class__
@@ -119,7 +119,7 @@ class AST(dict):
                     if isinstance(v, cls):
                         yield from v.search(match)
 
-    def sub(self, match, repl):
+    def sub(self, match: dict[str, Any], repl: dict[str, Any]) -> Self:
         if all(self.get(k) == v for k, v in match.items()):
             return self.__class__({k: repl.get(k, v) for k, v in self.items()})
         else:
@@ -146,13 +146,13 @@ class AST(dict):
 #
 
 
-class MRRIndenter(Indenter):  # type: ignore
-    NL_type = "_NL"  # type: ignore
-    OPEN_PAREN_types = []  # type: ignore
-    CLOSE_PAREN_types = []  # type: ignore
-    INDENT_type = "_INDENT"  # type: ignore
-    DEDENT_type = "_DEDENT"  # type: ignore
-    tab_len = 4  # type: ignore
+class MRRIndenter(Indenter):  # pyright: ignore
+    NL_type = "_NL"  # pyright: ignore
+    OPEN_PAREN_types = []  # pyright: ignore
+    CLOSE_PAREN_types = []  # pyright: ignore
+    INDENT_type = "_INDENT"  # pyright: ignore
+    DEDENT_type = "_DEDENT"  # pyright: ignore
+    tab_len = 4  # pyright: ignore
 
 
 @v_args(inline=True)
@@ -211,6 +211,7 @@ class MRRTrans(Transformer):
             not isinstance(init.init, tuple) or len(init.init) == typ.shape,
             "wrong array init length",
         )
+        assert isinstance(init.init, set)
         init.init.intersection_update(typ.domain)
         return (
             typ
@@ -377,7 +378,8 @@ class MRRTrans(Transformer):
             assert right is not None
             return left | AST(locrel="inner", locname=right.name, locidx=right.index)
         else:
-            assert mark == "." and right is not None
+            assert mark == "."
+            assert right is not None
             return right | AST(
                 line=left.line,
                 column=left.column,
@@ -419,6 +421,7 @@ class MRRTrans(Transformer):
         q = {}
         for arg in args:
             if isinstance(arg, AST):
+                assert isinstance(arg.quant, dict)
                 ParseError.ensure(
                     "multiple quantification",
                     not any(v in q for v in arg.quant),
@@ -435,14 +438,14 @@ class MRRTrans(Transformer):
 
 
 @v_args(inline=True)
-class ModelTrans(MRRTrans):
+class ModelTrans(MRRTrans):  # pyright: ignore
     def start(self, *args):
         *clocks, model = args
         return model | {"clocks": clocks[0] if clocks else {}}
 
 
 @v_args(inline=True)
-class PatternTrans(MRRTrans):
+class PatternTrans(MRRTrans):  # pyright: ignore
     def start(self, *rules):
         line = None
         for obj in rules:
