@@ -1,0 +1,57 @@
+[build-system]
+requires = [
+  "setuptools",
+  "wheel",
+  "cython",
+]
+
+[project]
+name = "ecco"
+version = "0.7"
+authors = [
+  { name = "Franck Pommereau", email = "franck.pommereau@univ-evry.fr" },
+]
+description = "Formal modelling and analysis of ecosystems."
+readme = "README.md"
+requires-python = ">= 3.9"
+dependencies = [
+  "jupyter",
+  "networkx",
+  "pandas",
+  "numpy",
+  "bqplot",
+  "colour",
+  "bitarray",
+  "sympy",
+  "tatsu==5.5.0",
+  "psutil",
+  "prince",
+  "pydot",
+  "python-igraph",
+  "ipycytoscape",
+  "unidecode",
+  "scikit-learn",
+  "typeguard",
+  "rich[jupyter]",
+  "frozendict",
+  "pytl @ git+https://github.com/fpom/pytl.git",
+  "cunf-ptnet-py3 @ git+https://github.com/fpom/cunf-ptnet-py3.git",
+  "pyddd @ git+https://github.com/fpom/pyddd.git",
+  "pyits @ git+https://github.com/fpom/pyits.git",
+  "pymc @ git+https://github.com/fpom/pymc.git",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Framework :: Jupyter",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/fpom/ecco"
+"Bug Tracker" = "https://github.com/fpom/ecco/issues"
+
