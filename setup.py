@@ -1,7 +1,11 @@
+import os
+
 from distutils.core import setup
 from setuptools import find_packages
 from Cython.Build import cythonize
 from distutils.extension import Extension
+
+os.environ["CXX"] = "g++"
 
 setup(
     name="ecco",
