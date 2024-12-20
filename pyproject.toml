@@ -34,6 +34,7 @@ dependencies = [
   "typeguard",
   "rich[jupyter]",
   "frozendict",
+  "z3-solver",
   "pytl @ git+https://github.com/fpom/pytl.git",
   "cunf-ptnet-py3 @ git+https://github.com/fpom/cunf-ptnet-py3.git",
   "pyddd @ git+https://github.com/fpom/pyddd.git",

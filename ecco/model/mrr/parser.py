@@ -198,7 +198,7 @@ class MRRTrans(Transformer):
         return AST(
             kind="decl",
             line=name.line,
-            name=name.value,
+            name=name.name,
             domain={0, 1},
             init={"+": {1}, "-": {0}, "*": {0, 1}}.get(sign.value),
             desc=desc.value.strip(),
@@ -219,7 +219,7 @@ class MRRTrans(Transformer):
             | AST(
                 kind="decl",
                 line=name.line,
-                name=name.value,
+                name=name.name,
                 desc=desc.value.strip(),
             )
         )
@@ -267,7 +267,7 @@ class MRRTrans(Transformer):
     def init_all(self):
         return None
 
-    def actdecl(self, *args):
+    def action(self, *args):
         parts = defaultdict(list)
         for a in args:
             parts[a.kind].append(a)

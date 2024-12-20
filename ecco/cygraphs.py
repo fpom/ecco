@@ -6,7 +6,8 @@ import subprocess
 import tempfile
 
 from math import pi
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, urlparse
 
 import igraph as ig
 import ipycytoscape as cy
@@ -18,6 +19,7 @@ import pandas as pd
 from colour import Color
 from IPython.display import display
 from pandas.api.types import is_numeric_dtype
+from jupyter_server import serverapp
 
 from . import bqcm, scm, tikz
 
@@ -454,6 +456,56 @@ class _TableDesc(_Desc):
         if self.column not in store.columns:
             self.__set__(obj, self.default)
         return store[self.column]
+
+
+class TableImageDesc(_TableDesc):
+    def __init__(self, table, store, column, default=""):
+        super().__init__(table, store, column, default)
+        self.root = Path("/")
+        self.url = None
+        self.cwd = cwd = Path.cwd()
+        for server in serverapp.list_running_servers():
+            root = Path(server["root_dir"])
+            if cwd.is_relative_to(root):
+                if root.is_relative_to(self.root):
+                    self.root = root
+                    self.url = Path(server["base_url"]) / "files"
+
+    def geturl(self, location):
+        if urlparse(location).scheme:
+            url = location
+        elif self.url is None:
+            raise ValueError(f"invalid URL {location!r}")
+        else:
+            url = self.url / (self.cwd / Path(location)).relative_to(self.root)
+        return f"url({url})"
+
+    def __get__(self, obj, type=None):
+        store = getattr(obj, self.store)
+        if self.column in store.columns:
+            return store[self.column]
+
+    def __set__(self, obj, val):
+        store = getattr(obj, self.store)
+        table = getattr(obj, self.table)
+        if not val:
+            # FIXME: restore bg-color
+            store.drop(
+                columns=[self.column, "background-fit"], errors="ignore", inplace=True
+            )
+            return
+        elif isinstance(val, str) and val in table.columns:
+            images = [self.geturl(v) for v in table[val]]
+        elif isinstance(val, (list, tuple, pd.Series, np.ndarray)) and len(val) == len(
+            table
+        ):
+            images = [self.geturl(v) for v in val]
+        else:
+            raise ValueError(f"cannot use {val!r} as image(s)")
+        store[self.column] = images
+        store["background-fit"] = ["cover"] * len(table)
+        # FIXME: save bg-color
+        store["background-color"] = ["transparent"] * len(table)
 
 
 class TableColorDesc(_TableDesc):
@@ -1119,6 +1171,7 @@ class Graph(object):
     nodes_shape = TableShapeDesc("nodes", "_ns", "shape", "round-rectangle")
     nodes_width = TableNumberDesc("nodes", "_ns", "width", 20.0, 0.0, 100.0)
     nodes_height = TableNumberDesc("nodes", "_ns", "height", 20.0, 0.0, 100.0)
+    nodes_image = TableImageDesc("nodes", "_ns", "background-image")
     nodes_fill_color = TableColorDesc("nodes", "_ns", "background-color", "size")
     nodes_fill_palette = PaletteDesc("red-green/white", "abs")
     nodes_fill_opacity = TableNumberDesc(

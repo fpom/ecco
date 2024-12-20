@@ -1,1 +1,1 @@
-start: _NL* actdecl+ _NL*
+start: _NL* action+ _NL*
