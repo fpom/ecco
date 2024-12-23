@@ -25,6 +25,8 @@ from . import bqcm, scm, tikz
 
 
 def maybeColor(c):
+    if c == "transparent":
+        return c
     try:
         return Color(c).hex
     except Exception:
@@ -459,8 +461,10 @@ class _TableDesc(_Desc):
 
 
 class TableImageDesc(_TableDesc):
-    def __init__(self, table, store, column, default=""):
-        super().__init__(table, store, column, default)
+    def __init__(self, table, store, imgcol, colcol):
+        super().__init__(table, store, imgcol, "")
+        self.color = colcol
+        self._last_color = None
         self.root = Path("/")
         self.url = None
         self.cwd = cwd = Path.cwd()
@@ -489,7 +493,7 @@ class TableImageDesc(_TableDesc):
         store = getattr(obj, self.store)
         table = getattr(obj, self.table)
         if not val:
-            # FIXME: restore bg-color
+            setattr(obj, self.color, self._last_color)
             store.drop(
                 columns=[self.column, "background-fit"], errors="ignore", inplace=True
             )
@@ -504,8 +508,8 @@ class TableImageDesc(_TableDesc):
             raise ValueError(f"cannot use {val!r} as image(s)")
         store[self.column] = images
         store["background-fit"] = ["cover"] * len(table)
-        # FIXME: save bg-color
-        store["background-color"] = ["transparent"] * len(table)
+        self._last_color = getattr(obj, self.color)
+        setattr(obj, self.color, "transparent")
 
 
 class TableColorDesc(_TableDesc):
@@ -525,9 +529,9 @@ class TableColorDesc(_TableDesc):
         table = getattr(obj, self.table)
         if val is None:
             val = self.last
-        if isinstance(val, str) and maybeColor(val) is not None:
+        if isinstance(val, str) and (c := maybeColor(val)) is not None:
             obj._legend[self.name] = None
-            colors = [Color(val).hex] * len(table)
+            colors = [c] * len(table)
         elif isinstance(val, str) and val in table.columns:
             obj._legend[self.name] = val
             colors = [maybeColor(c) for c in table[val]]
@@ -1171,12 +1175,12 @@ class Graph(object):
     nodes_shape = TableShapeDesc("nodes", "_ns", "shape", "round-rectangle")
     nodes_width = TableNumberDesc("nodes", "_ns", "width", 20.0, 0.0, 100.0)
     nodes_height = TableNumberDesc("nodes", "_ns", "height", 20.0, 0.0, 100.0)
-    nodes_image = TableImageDesc("nodes", "_ns", "background-image")
     nodes_fill_color = TableColorDesc("nodes", "_ns", "background-color", "size")
     nodes_fill_palette = PaletteDesc("red-green/white", "abs")
     nodes_fill_opacity = TableNumberDesc(
         "nodes", "_ns", "background-opacity", 1.0, 0.0, 1.0
     )
+    nodes_image = TableImageDesc("nodes", "_ns", "background-image", "nodes_fill_color")
     nodes_draw_color = TableColorDesc("nodes", "_ns", "border-color", "black")
     nodes_draw_palette = PaletteDesc("black")
     nodes_draw_width = TableNumberDesc("nodes", "_ns", "border-width", 0.0, 0.0, 10.0)
@@ -1431,6 +1435,9 @@ class Graph(object):
          - `nodes_fill_palette`: palette for background color
          - `nodes_fill_opacity`: background opacity (`float` between `0.0`
            and `1.0`)
+         - `nodes_image`: images to use as nodes background, which may be a list of
+             * paths to files relative to notebook, or
+             * URLs to images publicly available
          - `nodes_draw_color`: color for the border of nodes
          - `nodes_draw_palette`: palette for `nodes_draw_color`
          - `nodes_draw_style`: line style for the border of nodes,
