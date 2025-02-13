@@ -1,4 +1,5 @@
 import argparse
+import os
 import resource
 import psutil
 
@@ -27,5 +28,9 @@ if args.model:
         for _k in _extra:
             _globals[_k] = getattr(_module, _k)
 
-limit = int(psutil.virtual_memory().total * 0.8)
+try:
+    percent = max(10, min(100, int(os.environ.get("ECCO_MEMLIMIT", "80")))) / 100.0
+except ValueError:
+    percent = 0.8
+limit = int(psutil.virtual_memory().total * percent)
 resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
