@@ -48,7 +48,7 @@ _mrr_styles = {
 
 
 class Variable(_Variable):
-    def __txt__(self, styles={}):  # pyright: ignore
+    def __txt__(self, styles={}, context={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
         with prn.decl:
             if self.domain == {0, 1}:
@@ -95,14 +95,11 @@ class Variable(_Variable):
 
 
 class Expression(_Expression):
-    def __txt__(self, styles={}):  # pyright: ignore
+    def __txt__(self, styles={}, context={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
+        dom = context.get("domains", {})
         with prn.expr:
-            if (
-                len(self.vars) == 1
-                and (d := self._mod.v.get(var := list(self.vars)[0]))  # pyright: ignore
-                and d.domain == {0, 1}
-            ):
+            if len(self.vars) == 1 and dom.get(var := list(self.vars)[0]) == {0, 1}:
                 if self.const == -1:
                     return prn[prn(var, "var"), prn("+")]
                 else:
@@ -137,8 +134,9 @@ class Expression(_Expression):
 
 
 class Action(_Action):
-    def __txt__(self, styles={}):  # pyright: ignore
+    def __txt__(self, styles={}, context={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
+        dom = context.get("domains", {})
         with prn.action:
             if self.tags:
                 with prn.tag:
@@ -148,7 +146,7 @@ class Action(_Action):
             with prn.assign:
                 assign = []
                 for v, x in self.assign.items():
-                    if not x.vars and (d := self._mod.v.get(v)) and d.domain == {0, 1}:  # pyright: ignore
+                    if not x.vars and dom.get(v) == {0, 1}:
                         assign.append(prn[prn(v, "var"), prn("+" if x.const else "-")])
                     elif not x.vars and x.const == -1:
                         assign.append(prn[prn(v, "var"), prn("*")])
@@ -164,13 +162,11 @@ class Action(_Action):
                                 prn[prn(v, "var"), prn(f"{s}=", "op"), prn(c)]
                             )
                     else:
-                        assign.append(
-                            prn[prn(v, "var"), prn("=", "op"), x.__txt__(styles)]
-                        )
+                        assign.append(prn[prn(v, "var"), prn("=", "op"), prn(x)])
             return prn[
                 *tags,
                 " " if self.tags else "",
-                (prn / ", ")(g.__txt__(styles) for g in self.guard),
+                (prn / ", ")(g.__txt__(styles, context) for g in self.guard),
                 prn(">>", "op"),
                 (prn / ", ")(assign),
                 "  ",
@@ -179,8 +175,18 @@ class Action(_Action):
 
 
 class Model(_Model):
-    def __txt__(self, styles={}):  # pyright: ignore
+    def _txt_context(self, context):
+        dom = {v.name: v.domain for v in self.variables}
+        if "domains" in context:
+            ctx = dict(context)
+            ctx["domains"] |= dom
+        else:
+            ctx = context | {"domains": dom}
+        return ctx
+
+    def __txt__(self, styles={}, context={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
+        ctx = self._txt_context(context)
         lines = [prn("# === flattened model ===", "comment")]
         if self.meta:
             lines.append(prn("# meta information:", "comment"))
@@ -194,22 +200,12 @@ class Model(_Model):
                 lines.append(prn(f"#  - {key}: {txt}", "comment"))
         if self.variables:
             lines.append(prn("variables:", "header"))
-        lines.extend(prn["  ", v.__txt__(styles)] for v in self.variables)
+        lines.extend(prn["  ", v.__txt__(styles, ctx)] for v in self.variables)
         for attr in ["constraints", "rules"]:
             if actions := getattr(self, attr):
                 lines.append(prn(f"{attr}:", "header"))
-                lines.extend(prn["  ", a.__txt__(styles)] for a in actions)
+                lines.extend(prn["  ", a.__txt__(styles, ctx)] for a in actions)
         return (prn / "\n")(lines)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any], **impl: type[Record]) -> Self:
-        impl = {
-            "Model": Model,
-            "Action": Action,
-            "Expression": Expression,
-            "Variable": Variable,
-        } | impl
-        return super().from_dict(data, **impl)
 
     @classmethod
     def from_source(cls, _source: str, **_vardefs: str) -> "Model":
@@ -223,7 +219,7 @@ class Model(_Model):
 
 
 class Pattern(Model):
-    def __txt__(self, styles={}):  # pyright: ignore
+    def __txt__(self, styles={}, context={}):  # pyright: ignore
         prn = Printer(_mrr_styles | styles)
         lines = [prn("# === pattern ===", "comment")]
         if self.meta:
@@ -236,7 +232,7 @@ class Pattern(Model):
                 else:
                     txt = repr(val)
                 lines.append(prn(f"#  - {key}: {txt}", "comment"))
-            lines.extend(a.__txt__(styles) for a in self.actions)
+            lines.extend(a.__txt__(styles, context) for a in self.actions)
         return (prn / "\n")(lines)
 
     @classmethod

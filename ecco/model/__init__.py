@@ -123,6 +123,7 @@ class Expression(Record):
     op: Optional[str] = None
 
     def __post_init__(self):
+        super().__post_init__()
         self.__dict__["coeffs"] = frozendict(
             {k: v for k, v in self.coeffs.items() if v != 0}
         )
@@ -736,16 +737,6 @@ class Model(Record):
     variables: tuple[Variable, ...]
     actions: tuple[Action, ...]
     meta: Mapping[str, str] = field(default_factory=frozendict)
-
-    def __post_init__(self):
-        for var in self.variables:
-            var.__dict__["_mod"] = self
-        for act in self.actions:
-            act.__dict__["_mod"] = self
-            for g in act.guard:
-                g.__dict__["_mod"] = self
-            for x in act.assign.values():
-                x.__dict__["_mod"] = self
 
     @tested_cached_property
     def vars(self) -> frozenset[str]:

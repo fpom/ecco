@@ -34,6 +34,7 @@ class Printable(ABC):
     def __txt__(
         self,
         styles: Mapping[Any, str | Callable[[RichRenderable], RichRenderable]] = {},
+        context: Mapping[str, Any] = {},
     ) -> RichRenderable: ...
 
     def __str__(self) -> str:
@@ -163,62 +164,6 @@ class Record(Printable):
             elif typ in (tuple, frozenset) and not isinstance(val, typ):
                 self.__dict__[name] = typ(val)
 
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any], **impl: type["Record"]) -> Self:
-        """Build a new `Record` instance from its `dict` serialiation.
-
-        Args:
-            data: A `dict` holding a previously serialized `Record`.
-            impl: Concrete implementation of `Record` classes, in particular of `Expression`.
-
-        Returns:
-            A `Record` instance.
-
-        Raises:
-            ValueError: If some fields are missing in `data`.
-        """
-        args = {}
-        for name, opt, cont, typ in cls._fields():
-            val = data.get(name, None)
-            if val is None:
-                if not opt:
-                    raise ValueError(f"field '{cls.__name__}.{name}' cannot be empty")
-                continue
-            if issubclass(typ, Record):
-                typ = impl.get(typ.__name__, typ)
-                if cont is None:
-                    args[name] = typ.from_dict(val, **impl)
-                else:
-                    args[name] = cont(typ.from_dict(v, **impl) for v in val)
-            else:
-                if cont is None:
-                    args[name] = val
-                else:
-                    args[name] = cont(val)
-        return cls(**args)
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize a `Record` into a `dict`.
-
-        Returns:
-            A `dict` holding all the data from the `Record`.
-        """
-        d = {}
-        for name, opt, cont, typ in self._fields():
-            val = getattr(self, name)
-            if val is None and opt:
-                continue
-            if not issubclass(typ, Record):
-                if cont is None:
-                    d[name] = val
-                else:
-                    d[name] = list(val)
-            elif cont is None:
-                d[name] = val.to_dict()
-            else:
-                d[name] = [v.to_dict() for v in val]
-        return d
-
     def copy(self, **repl) -> Self:
         """Copy a `Record`, replacing some of its fields.
 
@@ -228,24 +173,9 @@ class Record(Printable):
         Returns:
             A new `Record` instance.
         """
-        args = {}
-        for name, _, cont, typ in self._fields():
-            val = repl.get(name, getattr(self, name, None))
-            if issubclass(typ, Record):
-                if cont is None:
-                    args[name] = val.copy()
-                else:
-                    args[name] = cont(v.copy() for v in val)
-            else:
-                if cont is None:
-                    args[name] = val
-                else:
-                    if cont is Mapping:
-                        cont = frozendict
-                    args[name] = cont(val)
-        return self.__class__(**args)
+        pass
 
-    def __txt__(self, styles={}, attr=None, index=None, key=None):
+    def __txt__(self, styles={}, context={}, attr=None, index=None, key=None):
         def _print_record(txt):
             name = Text.from_markup(f"[red]({txt})[/]")
             if attr is not None:
@@ -264,25 +194,25 @@ class Record(Printable):
             val = getattr(self, name)
             if issubclass(typ, Record):
                 if cont is None:
-                    root.add(val.__txt__(styles, name))
+                    root.add(val.__txt__(styles, context, name))
                 elif isinstance(val, (tuple, list)):
                     node = root.add(
                         Text.from_markup(rf"[blue]{name} [dim]\[][/dim][/blue]")
                     )
                     for i, v in enumerate(val):
-                        node.add(v.__txt__(styles, index=i))
+                        node.add(v.__txt__(styles, context, index=i))
                 elif isinstance(val, (set, frozenset)):
                     node = root.add(
                         Text.from_markup(rf"[blue]{name} [dim]()[/dim][/blue]")
                     )
                     for v in sorted(val):
-                        node.add(v.__txt__(styles))
+                        node.add(v.__txt__(styles, context))
                 elif isinstance(val, (dict, frozendict, Mapping)):
                     node = root.add(
                         Text.from_markup(rf"[blue]{name} [dim]{{}}[/dim][/blue]")
                     )
                     for k, v in sorted(val.items()):
-                        node.add(v.__txt__(styles, key=k))
+                        node.add(v.__txt__(styles, context, key=k))
                 else:
                     raise TypeError(f"unexpected contained for {name}: {cont}")
             elif opt and val is None:

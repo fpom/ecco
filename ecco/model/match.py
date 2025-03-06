@@ -100,7 +100,7 @@ class ConsCons(dict):
 
 
 class Match(Printable):
-    def __init__(self, actions, variables):
+    def __init__(self, actions, variables, model=None):
         self.variables = dict(variables)
         self._styles = {
             ("var", m): Text.assemble(
@@ -108,25 +108,21 @@ class Match(Printable):
             )
             for p, m in self.variables.items()
         }
-        self.actions = {}
-        modl = None
-        for pa, ma in dict(actions).items():
-            if modl is None:
-                vars = tuple(
-                    ma._mod.v[m].copy(name=p) for p, m in self.variables.items()
-                )
-                modl = pa._mod.copy(variables=vars)
-            npa = pa.copy()
-            npa.__dict__["_mod"] = modl
-            self.actions[npa] = ma
+        self.actions = dict(actions)
+        self.model = model
 
-    def __txt__(self, styles={}):
+    def __txt__(self, styles={}, context={}):
         prn = Printer(styles)
+        if self.model is not None:
+            mctx = self.model._txt_context(context)
+            pctx = mctx | {
+                "domains": {p: mctx["domains"][m] for p, m in self.variables.items()}
+            }
         _styles = self._styles | styles
         with prn.match:
             return (prn / "\n")(
                 Text("matched:", "red bold"),
-                *(prn["  ", p.__txt__(styles)] for p in self.actions.keys()),
+                *(prn["  ", p.__txt__(styles, pctx)] for p in self.actions.keys()),
                 prn[
                     Text("with", "red bold"),
                     " ",
@@ -137,7 +133,7 @@ class Match(Printable):
                     " ",
                     Text("as:", "red bold"),
                 ],
-                *(prn["  ", m.__txt__(_styles)] for m in self.actions.values()),
+                *(prn["  ", m.__txt__(_styles, mctx)] for m in self.actions.values()),
             )
 
     @classmethod
@@ -148,7 +144,7 @@ class Match(Printable):
         mod_sigs = {a: OpSig.from_action(a) for a in _mod}
         for match in cls._group_sig(pat_sigs, mod_sigs, cls._match_counts):
             for vm in cls._match_vars(match, mod.v):
-                yield cls(match, vm)
+                yield cls(match, vm, mod)
 
     @classmethod
     def _group_sig(cls, pat, mod, *checks):
