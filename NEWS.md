@@ -1,3 +1,4 @@
+- relicenced to AGPL
 - nodes may have images instead of colors
 - minor improvements
 - minor bugs fixed
