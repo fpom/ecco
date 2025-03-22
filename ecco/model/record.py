@@ -164,17 +164,6 @@ class Record(Printable):
             elif typ in (tuple, frozenset) and not isinstance(val, typ):
                 self.__dict__[name] = typ(val)
 
-    def copy(self, **repl) -> Self:
-        """Copy a `Record`, replacing some of its fields.
-
-        Args:
-            repl: Fields to be replaced, given by name and value.
-
-        Returns:
-            A new `Record` instance.
-        """
-        pass
-
     def __txt__(self, styles={}, context={}, attr=None, index=None, key=None):
         def _print_record(txt):
             name = Text.from_markup(f"[red]({txt})[/]")
