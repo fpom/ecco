@@ -15,16 +15,21 @@ class Model(MRRModel):
         ind = re.compile(r"^(\s*)")
         source = []
         hasvar = False
+        indecl = True
         indent = ""
         for line in (ln.rstrip() for ln in open(path)):
             if match := sec.match(line):
                 if match.group(1) in ("rules", "constraints"):
                     source.append(line)
-                elif hasvar:
-                    source.append(f"{indent}# {line}")
+                    indecl = False
+                elif indecl:
+                    if hasvar:
+                        source.append(f"{indent}# {line}")
+                    else:
+                        hasvar = True
+                        source.append(f"variables:  # {line}")
                 else:
-                    hasvar = True
-                    source.append(f"variables:  # {line}")
+                    source.append(line)
             else:
                 source.append(line)
                 if match := ind.match(line):
