@@ -148,7 +148,7 @@ class VarDecl(_Element):
                 h.write("bool")
                 space = True
         elif self.clock is not None:
-            h.write(f"{{{self.clock}: " f"{min(self.domain)}..{max(self.domain)}}}")
+            h.write(f"{{{self.clock}: {min(self.domain)}..{max(self.domain)}}}")
             space = True
         else:
             h.write(f"{{{min(self.domain)}..{max(self.domain)}}}")
@@ -317,7 +317,7 @@ class VarUse(_Element):
                 0 <= self.locidx < loc.sub[self.locname].size
                 if isinstance(self.locidx, int)
                 else True,
-                f"invalid index for {self.locname!r}" f"[{loc.sub[self.locname].size}]",
+                f"invalid index for {self.locname!r}[{loc.sub[self.locname].size}]",
             )
             self.decl = loc.sub[self.locname].var[self.name]
         if isinstance(self.index, str) and self.index != "self":
@@ -625,6 +625,11 @@ class Action(_Element):
             self._error(f"unknown domains for {', '.join(quanti - idx)}")
         elif idx > quanti:
             self._error(f"missing quantifier for {', '.join(idx - quanti)}")
+        assigned = set()
+        for a in self.right:
+            if a.target.name in assigned:
+                self._error(f"variable {a.target.name!r} assigned twice")
+            assigned.add(a.target.name)
 
     def expand_any(self, binding={}):
         if not any(q == "any" for q in self.quantifier.values()):
