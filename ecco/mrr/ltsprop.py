@@ -99,9 +99,9 @@ class CTLProp(Prop):
         elif op == "!=":
             return self.cg.lts.var_ne(var, right)
         elif op == "<":
-            return self.cg.lts.var_lt(var, right - 1)
+            return self.cg.lts.var_lt(var, right)
         elif op == ">":
-            return self.cg.lts.var_gt(var, right + 1)
+            return self.cg.lts.var_gt(var, right)
         elif op == "<=":
             return self.cg.lts.var_le(var, right)
         elif op == ">=":
