@@ -627,9 +627,9 @@ class Action(_Element):
             self._error(f"missing quantifier for {', '.join(idx - quanti)}")
         assigned = set()
         for a in self.right:
-            if a.target.name in assigned:
+            if (a.target.name, a.target.index) in assigned:
                 self._error(f"variable {a.target.name!r} assigned twice")
-            assigned.add(a.target.name)
+            assigned.add((a.target.name, a.target.index))
 
     def expand_any(self, binding={}):
         if not any(q == "any" for q in self.quantifier.values()):
