@@ -451,17 +451,13 @@ class ComponentGraph:
             comps.extend(self.components)
         props.extend((v, k) for k, v in aliased.items())
         if (found := len(props)) < min_props:
-            raise TypeError(
-                f"expected at least {min_props} properties," f" got {found}"
-            )
+            raise TypeError(f"expected at least {min_props} properties, got {found}")
         elif max_props is not None and found > max_props:
-            raise TypeError(f"expected at most {max_props} properties," f" got {found}")
+            raise TypeError(f"expected at most {max_props} properties, got {found}")
         if (found := len(comps)) < min_comps:
-            raise TypeError(
-                f"expected at least {min_comps} components," f" got {found}"
-            )
+            raise TypeError(f"expected at least {min_comps} components, got {found}")
         elif max_comps is not None and found > max_comps:
-            raise TypeError(f"expected at most {max_comps} components," f" got {found}")
+            raise TypeError(f"expected at most {max_comps} components, got {found}")
         return props, comps
 
     def forget(self, *args):
@@ -1075,22 +1071,16 @@ class ComponentGraph:
         # FIXME: to be tested
         self._get_args(comps, max_props=0)  # just to check args
         if len(stages) < 2:
-            raise TypeError(
-                f"expected at least two properties," f" but got {len(stages)}"
-            )
+            raise TypeError(f"expected at least two properties, but got {len(stages)}")
         # first: check searched properties
         if _split:
             cg = self.split(*comps, _warn=_warn, **stages)
         else:
             self.check(*comps, _warn=_warn, **stages)
             cg = self
-        # property -> components that validate it
-        a2c = defaultdict(set)
-        for a in stages:
-            a2c[a].update(cg.isin(a))
         # prune is required
         if _prune:
-            cg = cg.drop(*(set(self._c) - reduce(or_, a2c.values())))
+            cg = cg.drop(*(set(cg._c) - reduce(or_, (cg.isin(a) for a in stages))))
             if cg is None:
                 if _warn:
                     log.warn("none of the required stages were found")
@@ -1098,17 +1088,13 @@ class ComponentGraph:
         # check that each property allows to reach the next one
         stnames = tuple(stages)
         for stg, nxt in zip(stnames, stnames[1:]):
-            if src := cg.isin(stg):
-                if tgt := cg.isin(nxt):
-                    tgt_form = "|".join(f"C{c}" for c in tgt)
-                    tgt_basin = f"pred_s({tgt_form})"
-                    alias = f"reach_{nxt}"
-                    if _split:
-                        cg = cg.split(
-                            *src, _warn=_warn, _limit=_limit, **{alias: tgt_basin}
-                        )
-                    else:
-                        cg.check(*src, _warn=_warn, **{alias: tgt_basin})
+            if (src := cg.isin(stg)) and cg.isin(nxt):
+                tgt_form = f"EF({stages[nxt]})"
+                alias = f"reach_{nxt}"
+                if _split:
+                    cg = cg.split(*src, _warn=_warn, _limit=_limit, **{alias: tgt_form})
+                else:
+                    cg.check(*src, _warn=_warn, **{alias: tgt_form})
         # which component validates property + reachability -> new column
         both = defaultdict(set)
         for c in cg.isin(stnames[-1]):
