@@ -90,7 +90,23 @@ class ComponentGraph:
         self.lts = lts
         self.components = tuple(sorted(comps, key=attrgetter("num")))
         self._c = {c.num: c for c in comps}  # Component.num => Component
-        self._g = {}  # Component.num => Vertex
+        self._g = {}  # Component.num => Vertex index in .g.vs
+        self._traps()
+
+    def _traps(self):
+        for node in self:
+            vertex = self.g.vs[self._g[node.num]]
+            traps = vertex["traps"] = {}
+            exits = self.lts.pred(self.lts.succ(node.states)) & node.states
+            succ_s = self.lts.succ_s & node.states
+            for edge in vertex.in_edges():
+                pred = self[edge.source_vertex["node"]]
+                reach = succ_s(self.lts.succ(pred.states) & node.states)
+                if not (reach >= exits):
+                    traps[pred.num] = reach
+                    edge["trap"] = True
+                else:
+                    edge["trap"] = False
 
     @classmethod
     def from_model(cls, model, init=None):
@@ -308,6 +324,10 @@ class ComponentGraph:
             self._v2s(k, v) for k, v in sorted(c.consts.items(), key=_gal_sortkey_0)
         )
 
+    def _make_nc_traps(self, row):
+        "Compute the content of column 'traps'"
+        return hset(sorted(row["traps"]))
+
     def _make_ncols_setrel(self, row, rel):
         "Compute the content of column `rel`, depending on the value of `rel`."
         alias = self.lts.alias
@@ -351,7 +371,7 @@ class ComponentGraph:
            that satisfy `p` in the whole LTS
         """
         nodes = self.g.get_vertex_dataframe().set_index("node")
-        self._make_ncols(nodes, "size", "consts", *(r.name for r in setrel))
+        self._make_ncols(nodes, "size", "consts", "traps", *(r.name for r in setrel))
         nodes.sort_index(inplace=True)
         return nodes
 
@@ -1129,6 +1149,8 @@ class ComponentGraph:
             icons.append("⏹")
         elif any("DEAD" in args.get(rel, ()) for rel in ("HAS", "CONTAINS")):
             icons.append("□")
+        if args.get("traps", ()):
+            icons.append("⬖")
         if icons:
             return f"{txt}\n{''.join(icons)}"
         else:
@@ -1161,6 +1183,7 @@ class ComponentGraph:
             nodes_label_str=self._nodes_label_str,
             layout_extra=layout_extra,
             edges_label="actions",
+            edges_draw_style=[":" if e else "|" for e in self.edges["trap"]],
         )
         options.update(opt)
         return Graph(self.nodes, self.edges, **options)
