@@ -841,6 +841,52 @@ class ComponentGraph:
     # splits
     #
 
+    def untrap(self, *args, _recurse=False):
+        """Remove traps from nodes.
+
+        A trap in a node `n` is defined by an input node `i` and the set `t` of
+        states that `i` allows to reach within `n`. If `t` does not include all the
+        exits of `n`, then this is a trap and this method splits `n` into `n & t` and
+        `n - t`. Doing so, new traps may be created on the new nodes, in which case
+        `untrap` should be applyied recursively until no traps remain.
+
+        # Arguments
+
+         - `int, ...`: a series of components number, if empty,
+           all the components in the graph are considered
+         - `_recurse (bool=True)`: shall untrap be applied recursively
+
+        # Return
+
+        A new `ComponentGraph` (or the original one if no split occurred).
+        """
+        _, comps = self._get_args(args, max_props=0)
+        g = self
+        new = set()
+        while True:
+            cgc = set(g.components) - set(comps)
+            for c in comps:
+                traps = g.g.vs[g._g[c.num]]["traps"]
+                parts = [c]
+                for n, t in traps.items():
+                    parts = [
+                        s
+                        for p in parts
+                        for s in p.split_prop(f"_trap_{n}_{c.num}", t, None)
+                        if s is not None
+                    ]
+                    for p in parts:
+                        p.forget(f"_trap_{n}_{c.num}")
+                cgc.update(parts)
+                new.update(parts)
+            g = self.__class__(self.model, self.lts, *cgc)
+            if not _recurse:
+                break
+            comps = [c for c in cgc & new if g.g.vs[g._g[c.num]]["traps"]]
+            if not comps:
+                break
+        return g
+
     def _split(self, props, comps, rem, add, warn):
         """Split `comps` yielding the size of the result at each split.
 
