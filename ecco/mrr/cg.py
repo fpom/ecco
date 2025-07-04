@@ -1229,7 +1229,7 @@ class ComponentGraph:
             nodes_label_str=self._nodes_label_str,
             layout_extra=layout_extra,
             edges_label="actions",
-            edges_draw_style=[":" if e else "|" for e in self.edges["trap"]],
+            edges_draw_style="trap",
         )
         options.update(opt)
         return Graph(self.nodes, self.edges, **options)

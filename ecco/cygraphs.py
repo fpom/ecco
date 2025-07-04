@@ -310,9 +310,7 @@ class Palette(object):
         self.sort = sort
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}" f"({self.name!r}, {self.mode!r}, {self.sort})"
-        )
+        return f"{self.__class__.__name__}({self.name!r}, {self.mode!r}, {self.sort})"
 
     @property
     def mode(self):
@@ -339,10 +337,10 @@ class Palette(object):
         display(
             ipw.VBox(
                 [
-                    ipw.HTML(f"<b>{self.name}</b>" f" ({len(self.colors)} {c})"),
+                    ipw.HTML(f"<b>{self.name}</b> ({len(self.colors)} {c})"),
                     ipw.HTML(
                         "".join(
-                            f"<span style=" f"{s.format(col=col)!r}></span>"
+                            f"<span style={s.format(col=col)!r}></span>"
                             for col in self.colors
                         )
                     ),
@@ -725,7 +723,15 @@ class TableCurveDesc(_TableEnumDesc):
 
 class TableStyleDesc(_TableEnumDesc):
     values = {"solid", "dotted", "dashed", "double"}
-    alias = {"-": "solid", "|": "solid", ":": "dotted", "!": "dashed", "=": "double"}
+    alias = {
+        "-": "solid",
+        "|": "solid",
+        ":": "dotted",
+        "!": "dashed",
+        "=": "double",
+        True: "dotted",
+        False: "solid",
+    }
 
     def __init__(self, table, store, column, default):
         super().__init__(table, store, column, default, "style")
@@ -1725,7 +1731,7 @@ class Graph(object):
         if values is None:
             col = self._legend.get(color, None)
             if col is None:
-                raise ValueError("unknown color source," " use parameter 'values'")
+                raise ValueError("unknown color source, use parameter 'values'")
             data = table[col]
         elif isinstance(values, str) and values in table.columns:
             data = table[values]
