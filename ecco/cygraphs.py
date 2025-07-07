@@ -1461,9 +1461,8 @@ class Graph(object):
              * `"dim", values, invert, dim` as above with `0.0 <= dim <= 1.0` to set
                  dim level
 
-        A hidden node is still considered to compute layouts while a dropped
-        node is (mostly) ignored. GraphViz or PCA layouts make no difference
-        between both modes.
+        A hidden node is still considered to compute layouts while a dropped node
+        is (mostly) ignored. GraphViz layouts make no difference between both modes.
 
         ## Node labels options
 

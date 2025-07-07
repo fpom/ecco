@@ -8,7 +8,6 @@ from typing import Optional
 
 import igraph as ig
 import pandas as pd
-import prince
 import sympy
 
 from IPython.display import display
@@ -752,54 +751,6 @@ class ComponentGraph:
         else:
             return df
 
-    def pca(
-        self,
-        *args,
-        transpose=False,
-        n_components=2,
-        n_iter=3,
-        copy=True,
-        check_input=True,
-        engine="sklearn",
-        random_state=42,
-        rescale_with_mean=True,
-        rescale_with_std=True,
-    ):
-        """Principal component analysis of the matrix returned by `count()`.
-
-        # Arguments
-
-         - `int, ...`: the components to count in, or all if non is given
-         - `transpose (bool=True)`: passed to `count()`
-
-        For documentation about the other arguments, see
-        [Prince doc](https://github.com/MaxHalford/prince#principal-component-analysis-pca)
-
-        # Return
-
-        A [`pandas.DataFrame`](https://pandas.pydata.org) as computed by
-        [Prince](https://github.com/MaxHalford/prince).
-        """
-        count = self.count(*args, transpose=transpose)
-        count = count[count.sum(axis="columns") > 0]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            pca = prince.PCA(
-                n_components=n_components,
-                n_iter=n_iter,
-                copy=copy,
-                check_input=check_input,
-                engine=engine,
-                random_state=random_state,
-                rescale_with_mean=rescale_with_mean,
-                rescale_with_std=rescale_with_std,
-            )
-            pca.fit(count)
-            trans = pca.transform(count)
-        for idx in set(count.index) - set(trans.index):
-            trans.loc[idx] = [0, 0]
-        return trans
-
     def form(self, *args, variables=None, normalise=None, separate=False):
         """Describe components by Boolean formulas.
 
@@ -1214,15 +1165,6 @@ class ComponentGraph:
             log.print("cannot draw a graph with only one node", "error")
             display(self.nodes)
             return
-        try:
-            # don't add PCA layout when PCA fails
-            pca = self.pca()
-            pca *= 80 / pca.abs().max().max()
-            pos = {str(i): tuple(r) for i, r in pca.iterrows()}
-            layout_extra = {"PCA": pos}
-        except Exception:
-            layout_extra = {}
-            log.print("could not compute PCA, this layout is thus disabled", "warning")
         options = dict(
             nodes_fill_color="size",
             nodes_fill_palette=("red-green/white", "abs"),

@@ -18,7 +18,6 @@ import ipywidgets as ipw
 import its
 import numpy as np
 import pandas as pd
-import prince
 import sympy
 
 from IPython.display import display
@@ -533,13 +532,16 @@ class Model(BaseModel):
 
     def gal(self, compact=False, permissive=False, showlog=True, init={}):
         path = self.gal_path(compact, permissive)
-        with log(
-            head="<b>saving</b>",
-            tail=path,
-            done_head="<b>saved:</b>",
-            done_tail=path,
-            verbose=showlog,
-        ), open(path, "w") as out:
+        with (
+            log(
+                head="<b>saving</b>",
+                tail=path,
+                done_head="<b>saved:</b>",
+                done_tail=path,
+                verbose=showlog,
+            ),
+            open(path, "w") as out,
+        ):
             name = re.sub("[^a-z0-9]+", "", self.base.name, flags=re.I)
             out.write(f"gal {name} {{\n    //*** variables ***//\n")
             # variables
@@ -615,7 +617,7 @@ class Model(BaseModel):
             for rule in self.spec.rules:
                 if permissive:
                     guard = " && ".join(
-                        f"({s.name} == {s.sign:d}" f" || {s.name}_flip == 1)"
+                        f"({s.name} == {s.sign:d} || {s.name}_flip == 1)"
                         for s in rule.left
                     )
                 else:
@@ -632,9 +634,7 @@ class Model(BaseModel):
                         out.write(f"        {s.name}_flip = 1;\n")
                 if compact:
                     out.write(
-                        "        fixpoint {\n"
-                        '            self."rconst";\n'
-                        "        }\n"
+                        '        fixpoint {\n            self."rconst";\n        }\n'
                     )
                 out.write("    }\n")
             if permissive:
@@ -692,7 +692,7 @@ class Model(BaseModel):
             head="<b>checking for Zeno executions</b>",
             tail="{step}",
             done_head="<b>Zeno:</b>",
-            done_tail=('<span style="color:#080; font-weight:bold;">' "no</span>"),
+            done_tail=('<span style="color:#080; font-weight:bold;">no</span>'),
             steps=[
                 "computing reachable states",
                 "extracting transient states",
@@ -721,9 +721,7 @@ class Model(BaseModel):
             pred_h = pred.gfp()
             hull = succ_h(transient) & pred_h(transient)
             if hull:
-                log.done_tail = (
-                    '<span style="color:#800; font-weight:bold;">' "YES</span>"
-                )
+                log.done_tail = '<span style="color:#800; font-weight:bold;">YES</span>'
             else:
                 log.finish()
                 return
@@ -788,9 +786,7 @@ class Model(BaseModel):
             try:
                 out = subprocess.check_output(argv, encoding="utf-8")
             except subprocess.CalledProcessError as err:
-                log.err(
-                    f"<tt>its-ctl</tt> exited with status code" f" {err.returncode}"
-                )
+                log.err(f"<tt>its-ctl</tt> exited with status code {err.returncode}")
                 out = err.output
                 debug = True
         if debug:
@@ -825,7 +821,7 @@ class Model(BaseModel):
         try:
             out = subprocess.check_output(argv, encoding="utf-8")
         except subprocess.CalledProcessError as err:
-            log.err(f"<tt>its-ltl</tt> exited with status code" f" {err.returncode}")
+            log.err(f"<tt>its-ltl</tt> exited with status code {err.returncode}")
             out = err.output
             debug = True
         if debug:
@@ -1120,7 +1116,7 @@ class Model(BaseModel):
         raise NotImplementedError
 
     def _pep_epn(self, stream, states, rules):
-        stream.write("PEP\n" "PetriBox\n" "FORMAT_N2\n")
+        stream.write("PEP\nPetriBox\nFORMAT_N2\n")
         # places
         stream.write("PL\n")
         pnum = {}
@@ -1397,7 +1393,7 @@ class ComponentGraph(object):
         """
         self.model = model
         if compact and not self.model.spec.constraints:
-            log.warn("model has no constraints," " setting <code>compact=False</code>")
+            log.warn("model has no constraints, setting <code>compact=False</code>")
             compact = False
         if lts is None:
             self.lts = LTS(self.model.gal(), init, compact)
@@ -1640,11 +1636,10 @@ class ComponentGraph(object):
             _max_props = max_props
         if not min_props <= len(properties) <= _max_props:
             if min_props == max_props == 0:
-                raise TypeError(f"no properties expected," f" got {len(properties)}")
+                raise TypeError(f"no properties expected, got {len(properties)}")
             elif max_props < 0:
                 raise TypeError(
-                    f"expected at least {min_props} properties,"
-                    f" got {len(properties)}"
+                    f"expected at least {min_props} properties, got {len(properties)}"
                 )
             else:
                 raise TypeError(
@@ -1657,11 +1652,10 @@ class ComponentGraph(object):
             _max_compo = max_compo
         if not min_compo <= len(components) <= _max_compo:
             if min_compo == max_compo == 0:
-                raise TypeError(f"no components expected," f" got {len(components)}")
+                raise TypeError(f"no components expected, got {len(components)}")
             elif max_compo < 0:
                 raise TypeError(
-                    f"expected at least {min_compo} components,"
-                    f" got {len(components)}"
+                    f"expected at least {min_compo} components, got {len(components)}"
                 )
             else:
                 raise TypeError(
@@ -2122,8 +2116,7 @@ class ComponentGraph(object):
             size = sum((len(c) for c in compos), 0) + len(self.components) - len(compos)
             if size > limit:
                 answer = input(
-                    f"This will create a graph with {size} nodes,"
-                    f" are you sure? [N/y] "
+                    f"This will create a graph with {size} nodes, are you sure? [N/y] "
                 )
                 if not answer.lower().startswith("y"):
                     return
@@ -2217,51 +2210,6 @@ class ComponentGraph(object):
         else:
             return df
 
-    def pca(
-        self,
-        *args,
-        transpose=False,
-        n_components=2,
-        n_iter=3,
-        copy=True,
-        check_input=True,
-        engine="sklearn",
-        random_state=42,
-        rescale_with_mean=True,
-        rescale_with_std=True,
-    ):
-        """principal component analysis of the `count` matrix
-
-        Arguments:
-         - `number, ...` (`int`): a series of components number, if empty,
-           all the components in the graph are considered
-         - `transpose`: passed to method `count()`
-
-        See https://github.com/MaxHalford/prince#principal-component-analysis-pca
-        for documentation about the other arguments.
-
-        Returns: a `pandas.DataFrame` as computed by Prince.
-        """
-        count = self.count(*args, transpose=transpose)
-        count = count[count.sum(axis="columns") > 0]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            pca = prince.PCA(
-                n_components=n_components,
-                n_iter=n_iter,
-                copy=copy,
-                check_input=check_input,
-                engine=engine,
-                random_state=random_state,
-                rescale_with_mean=rescale_with_mean,
-                rescale_with_std=rescale_with_std,
-            )
-            pca.fit(count)
-            trans = pca.transform(count)
-        for idx in set(count.index) - set(trans.index):
-            trans.loc[idx] = [0, 0]
-        return trans
-
     def _convert_nodes_label(self, txt, **args):
         "convert labels for states"
         txt = str(txt)
@@ -2294,15 +2242,6 @@ class ComponentGraph(object):
             log.print("cannot draw a graph with only one node", "error")
             display(self.nodes)
             return
-        try:
-            # don't add PCA layout when PCA fails
-            pca = self.pca()
-            pca *= 80 / pca.abs().max().max()
-            pos = {str(i): tuple(r) for i, r in pca.iterrows()}
-            layout_extra = {"PCA": pos}
-        except Exception:
-            layout_extra = {}
-            log.print("could not compute PCA, this layout is thus disabled", "warning")
         options = dict(
             nodes_fill_color="size",
             nodes_fill_palette=("red-green/white", "abs"),
@@ -2339,9 +2278,7 @@ class ComponentGraph(object):
         # check arguments
         self._get_args(args, max_props=0)
         if len(props) < 2:
-            raise TypeError(
-                f"expected at least two properties," f" but {len(props)} given"
-            )
+            raise TypeError(f"expected at least two properties, but {len(props)} given")
         elif len(set(props.values())) != len(props):
             raise TypeError(f"properties must be pairwise distinct")
         # classify nodes and prune
@@ -2368,7 +2305,7 @@ class ComponentGraph(object):
                 seq[s].append(cg._g[node])
         seq = [s for s in seq if s]
         if len(seq) <= 1:
-            log.warn(f"only {len(seq)} non-empty properties," f" no path can be found")
+            log.warn(f"only {len(seq)} non-empty properties, no path can be found")
             return cg
         paths = {((None, s),) for s in seq[0]}
         for tgt in seq[1:]:
