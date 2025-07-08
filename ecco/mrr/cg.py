@@ -1142,7 +1142,7 @@ class ComponentGraph:
             icons.append("⏺")
         elif "hull" in args.get("EQUALS", ()):
             icons.append("☍")
-        elif any("scc" in args.get(rel, ()) for rel in ("CONTAINS", "EQUALS")):
+        elif any(prop in args.get("CONTAINS", ()) for prop in ("scc", "hull")):
             icons.append("○")
         if any("DEAD" in args.get(rel, ()) for rel in ("ISIN", "EQUALS")):
             icons.append("⏹")
