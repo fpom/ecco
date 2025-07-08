@@ -96,7 +96,9 @@ class ComponentGraph:
         for node in self:
             vertex = self.g.vs[self._g[node.num]]
             traps = vertex["traps"] = {}
-            exits = self.lts.pred(self.lts.succ(node.states)) & node.states
+            exits = (
+                self.lts.pred(self.lts.succ(node.states) - nodes.states) & node.states
+            )
             succ_s = self.lts.succ_s & node.states
             for edge in vertex.in_edges():
                 pred = self[edge.source_vertex["node"]]
