@@ -103,11 +103,11 @@ class ComponentGraph:
             for edge in vertex.in_edges():
                 pred = self[edge.source_vertex["node"]]
                 reach = succ_s(self.lts.succ(pred.states) & node.states)
-                if not (reach >= exits):
+                if reach >= exits:
+                    edge["trap"] = False
+                else:
                     traps[pred.num] = reach
                     edge["trap"] = True
-                else:
-                    edge["trap"] = False
 
     @classmethod
     def from_model(cls, model, init=None):
