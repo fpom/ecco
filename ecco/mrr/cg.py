@@ -1171,7 +1171,6 @@ class ComponentGraph:
             nodes_fill_color="size",
             nodes_fill_palette=("red-green/white", "abs"),
             nodes_label_str=self._nodes_label_str,
-            layout_extra=layout_extra,
             edges_label="actions",
             edges_draw_style="trap",
         )
