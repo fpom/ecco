@@ -30,11 +30,10 @@ class CompileError(Exception):
 
 
 class ExprVisitor:
-    """Sympy expressions visitor.
-    """
+    """Sympy expressions visitor."""
+
     def __call__(self, expr):
-        handler = getattr(self, expr.func.__name__,
-                          getattr(self, "GENERIC", None))
+        handler = getattr(self, expr.func.__name__, getattr(self, "GENERIC", None))
         if handler is None:
             raise CompileError("unsupported operation %s" % expr.func.__name__)
         return handler(expr)
@@ -53,19 +52,25 @@ def cached_property(method):
 
 
 class Record:
-    """Base class to store information.
-    """
+    """Base class to store information."""
+
     _fields = []
     _options = []
     _defaults = {}
     _multiline = True
 
     def __init__(self, *largs, **kargs):
-        sig = Signature([Parameter(name, Parameter.POSITIONAL_OR_KEYWORD)
-                         for name in self._fields]
-                        + [Parameter(name, Parameter.POSITIONAL_OR_KEYWORD,
-                                     default=self._defaults.get(name, None))
-                           for name in self._options])
+        sig = Signature(
+            [Parameter(name, Parameter.POSITIONAL_OR_KEYWORD) for name in self._fields]
+            + [
+                Parameter(
+                    name,
+                    Parameter.POSITIONAL_OR_KEYWORD,
+                    default=self._defaults.get(name, None),
+                )
+                for name in self._options
+            ]
+        )
         self._args = sig.bind(*largs, **kargs)
         self._args.apply_defaults()
         for key, val in self._args.arguments.items():
@@ -78,18 +83,22 @@ class Record:
             pass
 
     def __repr__(self):
-        return "%s(%s)" % (self.__class__.__name__,
-                           ", ".join("%s=%r" % item for item in self.items()))
+        return "%s(%s)" % (
+            self.__class__.__name__,
+            ", ".join("%s=%r" % item for item in self.items()),
+        )
 
     def __eq__(self, other):
-        return (self.__class__ is other.__class__
-                and all(value == getattr(other, name)
-                        for name, value in self.items()))
+        return self.__class__ is other.__class__ and all(
+            value == getattr(other, name) for name, value in self.items()
+        )
 
     def __hash__(self):
-        return functools.reduce(operator.xor,
-                                (hash(item for item in self.items())),
-                                hash(self.__class__.__name__))
+        return functools.reduce(
+            operator.xor,
+            (hash(item for item in self.items())),
+            hash(self.__class__.__name__),
+        )
 
     def items(self):
         for field in self._fields:
@@ -112,17 +121,17 @@ class Record:
         if cycle:
             p.text("<%s ...>" % cls)
         else:
-            with p.group(len(cls)+1, "%s(" % cls, ")"):
+            with p.group(len(cls) + 1, "%s(" % cls, ")"):
                 for i, (name, value) in enumerate(self.items()):
                     if i:
                         p.text(", ")
                         if self._multiline:
                             p.breakable()
-                    with p.group(len(name)+1, "%s=" % name, ""):
+                    with p.group(len(name) + 1, "%s=" % name, ""):
                         p.pretty(value)
 
 
-class BaseModel (object):
+class BaseModel(object):
     """Store a model.
 
     # Attributes
@@ -131,6 +140,7 @@ class BaseModel (object):
      - `spec`: the model itself
      - `base`: base directory in which auxiliary files are stored
     """
+
     def __init__(self, path, spec, base=None):
         self.path = pathlib.Path(path)
         self.spec = spec
@@ -157,8 +167,7 @@ class BaseModel (object):
             else:
                 parts[-1].append(a)
         if len(args) > 1:
-            return self.base.joinpath(*("-".join(p) for p in parts)) \
-                .with_suffix(ext)
+            return self.base.joinpath(*("-".join(p) for p in parts)).with_suffix(ext)
         else:
             return self.base.joinpath(self.base.name).with_suffix(ext)
 
@@ -175,15 +184,16 @@ def load(path, *extra):
 
 class hset(object):
     "similar to frozenset with sorted values"
+
     # work around pandas that does not display frozensets in order
     def __init__(self, iterable=(), key=None, reverse=False, sep=", "):
-        self._values = tuple(sorted(iterable, key=key, reverse=reverse))
+        self._values = tuple(sorted(set(iterable), key=key, reverse=reverse))
         self._sep = sep
 
     def __hash__(self):
-        return functools.reduce(operator.xor,
-                                (hash(v) for v in self._values),
-                                hash("hset"))
+        return functools.reduce(
+            operator.xor, (hash(v) for v in self._values), hash("hset")
+        )
 
     def __eq__(self, other):
         try:
