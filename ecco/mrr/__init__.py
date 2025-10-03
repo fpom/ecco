@@ -1,18 +1,18 @@
 import re
-
-from itertools import product
 from collections import defaultdict
+from itertools import product
+from typing import cast
 
 import pandas as pd
-
 from colour import Color
+import sympy as sp
 
-from .parser import parse, parse_src
-from .cg import ComponentGraph
-from .lts import topo, setrel
 from .. import BaseModel, hset
 from ..cygraphs import Graph
 from ..ui import HTML
+from .cg import ComponentGraph
+from .lts import setrel, topo
+from .parser import Action, BinOp, Location, ModItem, VarDecl, VarUse, parse, parse_src
 
 
 class Model(BaseModel):
@@ -328,149 +328,113 @@ class Model(BaseModel):
         The GAL specification is defined with a unique initial state that is
         chosen using the smallest of initial value of each variable.
 
-        Return: a pair `init, doms` where
+        Return: a triple `init, doms`, `actions` where
          - `init` is a `dict` suitable to initialise a `cg.ComponentGraph` that
            gathers all the initial states as specified in the MRR model (and
            not just that savec in the GAL)
          - `doms` is a `dict` that maps every variable to its domain
+         - `actions` is the `set` of action names
         """
-        init, doms, clocks = {}, {}, {}
-        gnames = self.spec.gal = {}
+        init, doms, actions = {}, {}, set()
+        flat = {k: [] for k in ModItem}
         name = re.sub("[^a-z0-9]+", "", self.base.name, flags=re.I)
         with self["gal"].open("w") as out:
             out.write(f"gal {name} {{\n")
-            self._gal_vars(out, self.spec, [], init, doms, clocks, gnames)
-            guard = set()
-            self._gal_actions(out, self.spec, [], "constraints", guard, None, gnames)
-            if guard:
-                guard = " || ".join(f"({g})" for g in sorted(guard))
-            else:
-                guard = None
-            self._gal_actions(out, self.spec, [], "rules", guard, None, gnames)
-            self._gal_clocks(out, clocks, guard, gnames)
+            for kind, *rest in cast(Location, self.spec).flatten():
+                flat[kind].append(rest)
+            for locidx, decl in flat[ModItem.VAR]:
+                self._gal_var(out, locidx, decl, init, doms)
+            con_guards = []
+            for locidx, act in flat[ModItem.CON]:
+                con_guards.append(self._gal_act(out, locidx, act, actions, sp.true))
+            guard = sp.And(*con_guards)
+            for locidx, act in flat[ModItem.RUL]:
+                self._gal_act(out, locidx, act, actions, guard)
+            for clock, vars in flat[ModItem.CLK]:
+                self._gal_clk(out, clock, vars, actions, guard)
             out.write("}\n")
-        return init, doms, gnames
+        return init, doms, actions
 
-    def _gal_vars(self, out, loc, path, init, domains, clocks, gnames):
-        "Auxiliary methd that exports variables to GAL."
-        head = ".".join(path) + ("." if path else "")
-        for var in loc.variables:
-            if var.isbool:
-                vtype = "bool"
-            elif var.clock is not None:
-                vtype = "clock"
-                clocks.setdefault(var.clock, {})
-            else:
-                vtype = "int"
-            if var.size is None:
-                vname = f"{vtype}_{head}{var.name}"
-                if var.init is None:
-                    out.write(f"  int {vname} = -1;\n")
-                    init[vname] = {-1}
-                else:
-                    out.write(f"  int {vname} = {min(var.init)};\n")
-                    init[vname] = var.init
-                gnames[vname] = var
-                if var.clock:
-                    domains[vname] = var.domain | {-1}
-                    clocks[var.clock][vname] = var
-                else:
-                    domains[vname] = var.domain
-            else:
-                for idx in range(var.size):
-                    vname = f"{vtype}_{head}{var.name}.{idx}"
-                    if var.init[idx] is None:
-                        init[vname] = {-1}
-                        out.write(f"  int {vname} = -1;\n")
-                    else:
-                        init[vname] = var.init[idx]
-                        out.write(f"  int {vname} = {min(var.init[idx])};\n")
-                    domains[vname] = var.domain
-                    gnames[vname] = var
-                    if var.clock:
-                        clocks[var.clock][vname] = var
-        for sub in loc.locations:
-            if sub.size is None:
-                self._gal_vars(
-                    out, sub, path + [f"{sub.name}"], init, domains, clocks, gnames
-                )
-            else:
-                for idx in range(sub.size):
-                    self._gal_vars(
-                        out,
-                        sub,
-                        path + [f"{sub.name}.{idx}"],
-                        init,
-                        domains,
-                        clocks,
-                        gnames,
-                    )
+    def _gal_var(self, out, locidx, decl: VarDecl, init, doms):
+        name = self._gal_vname(locidx, decl)
+        init[name] = {-1} if decl.init is None else set(cast(frozenset[int], decl.init))
+        doms[name] = set(decl.domain)
+        if decl.clock is not None:
+            doms[name].add(-1)
+        out.write(f"  int {name} = {min(init[name])};\n")
 
-    def _gal_actions(self, out, loc, path, kind, guard, locidx, gnames):
-        "Auxiliary method that exports actions to GAL."
-        head = ".".join(path) + ("." if path else "")
-        for num, act in enumerate(getattr(loc, kind), start=1):
-            name = f"{head}{kind[0].upper()}{num}"
-            self._gal_act(out, act, name, guard, path, locidx, gnames)
-        for sub in loc.locations:
-            if sub.size is None:
-                self._gal_actions(
-                    out, sub, path + [f"{sub.name}"], kind, guard, locidx, gnames
-                )
-            else:
-                for idx in range(sub.size):
-                    self._gal_actions(
-                        out, sub, path + [f"{sub.name}.{idx}"], kind, guard, idx, gnames
-                    )
-
-    def _gal_act(self, out, act, name, guard, path, locidx, gnames):
-        "Auxiliary method that exports one action to GAL"
-        if locidx is None:
-            binding = {}
+    def _gal_vname(self, locidx, var: VarDecl | VarUse):
+        decl = var if isinstance(var, VarDecl) else var.decl
+        if decl.clock is not None:
+            prefix = "clock"
+        elif decl.isbool:
+            prefix = "bool"
         else:
-            binding = {"self": locidx}
-        out.write(f"  // {act}\n")
-        for new, val in act.expand_any(binding):
-            if val:
-                tail = "._." + ".".join(f"{k}.{v}" for k, v in sorted(val.items()))
-            else:
-                tail = ""
-            gnames[f"{name}{tail}"] = new
-            cond = " && ".join(sorted(f"({b.gal(path)})" for b in new.left))
-            loop = " && ".join(sorted(f"({a.cond().gal(path)})" for a in new.right))
-            condloop = f"{cond} && !({loop})"
-            if isinstance(guard, set):
-                guard.add(condloop)
-                out.write(f"  transition {name}{tail} [{condloop}] {{\n")
-            elif guard is None:
-                out.write(f"  transition {name}{tail} [{condloop}] {{\n")
-            else:
-                out.write(
-                    f"  transition {name}{tail} [{condloop}" f" && !({guard})] {{\n"
-                )
-            out.write(f"    // {new}\n")
-            for right in new.right:
-                out.write("    " + "\n    ".join(right.gal(path)) + "\n")
-            out.write("  }\n")
+            prefix = "int"
+        name = ".".join(var.name.rstrip("]").split("["))
+        if isinstance(var, VarUse) and isinstance(var.index, int):
+            path = var @ locidx + (name, var.index)
+        else:
+            path = var @ locidx + (name,)
+        return f"{prefix}_{'.'.join(str(p) for p in path)}"
 
-    def _gal_clocks(self, out, clocks, guard, gnames):
-        "Auxiliary method that generates clock ticks into GAL."
-        for clock, variables in clocks.items():
-            gnames[f"tick.{clock}"] = (clock, variables)
-            skip = " && ".join(f"({name} == -1)" for name in variables)
-            cond = " && ".join(
-                f"({name} < {max(var.domain)})" for name, var in variables.items()
+    def _gal_act(self, out, locidx, act: Action, actions, extraguard):
+        def vname(var: VarUse):
+            return self._gal_vname(locidx, var)
+
+        path = act.loc.path @ locidx + (act.name,)
+        name = ".".join(str(p) for p in path)
+        if any(k != "self" for k in act.bound):
+            name += "._." + ".".join(
+                f"{k}.{v}"
+                if isinstance(v, int)
+                else f"{k}.{'_'.join(str(i) for i in sorted(v))}"
+                for k, v in sorted(act.bound.items())
+                if k != self
             )
-            if guard is None:
-                out.write(f"  transition tick.{clock}" f" [!({skip}) && {cond}] {{\n")
-            else:
-                out.write(
-                    f"  transition tick.{clock}"
-                    f" [!({skip}) && {cond} && !({guard})] {{\n"
-                )
-            for name in variables:
-                out.write(f"    if ({name} >= 0) {{ {name} += 1; }}\n")
-            out.write("  }\n")
+        actions.add(name)
+        cond = sp.And(*(c.sympy(-1, vname) for c in act.left))
+        loop = sp.And(
+            *(
+                BinOp(a.line, a.column, a.target, "==", a.value).sympy(-1, vname)
+                for a in act.right
+            )
+        )
+        guard = sp.And(cond, sp.Not(loop), extraguard)
+        out.write(
+            f"  // {'.'.join(str(p) for p in (act.loc.path @ locidx) + (act.boundname,))}\n"
+        )
+        out.write(f"  // {act}\n")
+        out.write(f"  transition {name} [{sp.ccode(guard)}] {{\n")
+        for a in act.right:
+            assert a.target.decl is not None
+            assign = BinOp(a.line, a.column, a.target, "=", a.value)
+            target = self._gal_vname(locidx, a.target)
+            m = min(a.target.decl.domain)
+            M = max(a.target.decl.domain)
+            out.write(f"    {sp.ccode(assign.sympy(-1, vname))}\n")
+            if isinstance(a.value, int):
+                if not m <= a.value <= M:
+                    out.write("    abort;  // out of bound assignment\n")
+            elif a.value is not None:
+                out.write(f"    if ({target} < {m}) {{ abort; }}\n")
+                out.write(f"    if ({target} > {M}) {{ abort; }}\n")
+        out.write("  }\n")
+        return cond
+
+    def _gal_clk(self, out, clock, variables, actions, extraguard):
+        vdecl = {self._gal_vname(locidx, decl): decl for locidx, decl in variables}
+        actions.add(f"tick.{clock}")
+        skip = sp.And(*(sp.Symbol(v) == -1 for v in vdecl))
+        cond = sp.And(
+            *(sp.Symbol(name) < max(var.domain) for name, var in vdecl.items())
+        )
+        guard = sp.And(sp.Not(skip), cond, extraguard)
+        out.write(f"  // tick.{clock}\n")
+        out.write(f"  transition tick.{clock} [{sp.ccode(guard)}] {{\n")
+        for name in vdecl:
+            out.write(f"      if ({name} >= 0) {{ {name} += 1; }}\n")
+        out.write("  }\n")
 
 
 __extra__ = {"topo": topo, "setrel": setrel}

@@ -56,3 +56,10 @@ classifiers = [
 "Homepage" = "https://github.com/fpom/ecco"
 "Bug Tracker" = "https://github.com/fpom/ecco/issues"
 
+[tool.basedpyright]
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnannotatedClassAttribute = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportAny = "none"

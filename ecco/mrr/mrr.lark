@@ -34,13 +34,15 @@ condition: (var | INT) CMP (var | INT)   -> condition_long
     | var UNOP                           -> condition_short
 assignment: var ASSIGN (var | INT | "*") -> assignment_long
     | var UNOP                           -> assignment_short
-var: NAME ["[" index "]"] ["@" atloc]
-atloc: AT                    -> at_outer
-    | NAME ["[" index "]"]   -> at_inner
-index: NAT
-    | NAME [BINOP NAT]
+var: NAME ["[" intexpr "]"] ["@" atloc]
+atloc: AT                      -> at_outer
+    | NAME ["[" intexpr "]"]   -> at_inner
 
-quantifier: "for" QUANTI NAME ("," NAME)* ("," quantifier)*
+quantifier: quant+ ["if" boolexpr] 
+quant: "for" QUANTI NAME ("," NAME)*
+
+intexpr: (NAME | INT | BINOP | "(" | ")")+
+boolexpr: (NAME | INT | CMP | BINOP | "and" | "or" | "not" | "(" | ")")+
 
 QUANTI: /all|any/
 

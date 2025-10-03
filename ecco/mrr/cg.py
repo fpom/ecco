@@ -1,10 +1,9 @@
 import re
-import warnings
 
 from collections import defaultdict
 from functools import partial, reduce
 from operator import attrgetter, or_
-from typing import Optional
+from typing import Self, override
 
 import igraph as ig
 import pandas as pd
@@ -123,8 +122,7 @@ class ComponentGraph:
 
         Return: a `ComponentGraph` instance
         """
-        default_init, doms, names = model.gal()
-        actions = [n for n in names if n not in doms]
+        default_init, doms, actions = model.gal()
         g2m, m2g, n2n, n2t = cls._translate_names(doms, actions)
         vmin = {v: min(d) for v, d in doms.items()}
         vmax = {v: max(d) for v, d in doms.items()}
@@ -705,20 +703,27 @@ class ComponentGraph:
         """
         props, comps = self._get_args(args, aliased, min_props=1)
         _rel = {_rel} if isinstance(_rel, setrel) else set(_rel)
+        if not _strict:
+            lose = set()
+            for r in _rel:
+                lose.update(self._relmatch[r, False])
+            _rel.update(lose)
         found = set(c.num for c in comps) if _all else set()
         update = False
         for p, a in props:
             for c in comps:
                 if p not in c.props:
                     update = True
-                    self.check(p, c.num, a, _strict)
-            match = {c.num for c in comps if c.props[a or p] in _rel}
-            if _all:
-                found.intersection_update(match)
-            else:
-                found.update(match)
+                    self.check(p, c.num, a)
         if update:
             self.update()
+        for p, a in props:
+            for c in comps:
+                match = {c.num for c in comps if c.props[a or p] in _rel}
+                if _all:
+                    found.intersection_update(match)
+                else:
+                    found.update(match)
         return found
 
     def count(self, *args, transpose=False):
@@ -789,6 +794,9 @@ class ComponentGraph:
             return forms
         else:
             return sympy.simplify_logic(sympy.Or(*forms.values()), form=normalise)
+
+    def walk(self, *nodes, **filters):
+        return CGT(cg=self, tips=set(nodes or self._c)).all(**filters)
 
     #
     # splits
@@ -1155,7 +1163,7 @@ class ComponentGraph:
         else:
             return txt
 
-    def draw(self, **opt) -> Optional[Graph]:
+    def draw(self, **opt) -> Graph | None:
         """Draw the component graph as an interactive `cygraphs.Graph`.
 
         It accepts any option `opt` accepted by `cygraphs.Graph` and returns

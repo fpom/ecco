@@ -1,23 +1,30 @@
+import ast
+import operator
 import re
 import subprocess
-
 from collections import defaultdict
+from collections.abc import Collection, Generator, Sequence, Callable
 from dataclasses import dataclass, field
-from functools import reduce
-from itertools import chain, product
+from enum import StrEnum
+from functools import cached_property, reduce
+from itertools import chain
 from operator import or_
-from typing import Optional, Tuple, Set, Union, Sequence, Dict, Self
+from types import SimpleNamespace
+from typing import Literal, NoReturn, Self, cast
+
+import sympy as sp
+import z3
+from sympy.codegen.ast import Assignment as sp_Assign
 
 from .mrrparse import Indenter, Lark_StandAlone, ParseError, Token, Transformer, v_args
 from .pattparse import Lark_StandAlone as Lark_StandAlone_Pattern
-
 
 #
 # errors
 #
 
 
-def _error(line, column, message, errcls=ParseError):
+def _error(line, column, message, errcls=ParseError) -> NoReturn:
     if column is not None:
         err = errcls(f"[{line}:{column}] {message}")
     else:
@@ -27,12 +34,7 @@ def _error(line, column, message, errcls=ParseError):
     raise err
 
 
-def _assert(test, line, column, message, errcls=ParseError):
-    if not test:
-        _error(line, column, message, errcls)
-
-
-class BindError(Exception):
+class BindError(ParseError):
     pass
 
 
@@ -41,31 +43,107 @@ class BindError(Exception):
 #
 
 
-_line_dir = re.compile(r'^#\s+([0-9]+)\s+"<stdin>"\s*$')
-_cpp_head = subprocess.run(
-    ["cpp", "--traditional", "-C"], input="", encoding="utf-8", capture_output=True
-).stdout
-_comment = re.compile(r"(/\*.*?\*/)", re.S)
-_cpp_head = _comment.split(_cpp_head)[1::2]
-
-
-def cpp(text, **var):
+def cpp(text: str, **var: str | int):
     out = subprocess.run(
         ["cpp", "--traditional", "-C"] + [f"-D{k}={v}" for k, v in var.items()],
         input=text,
         encoding="utf-8",
         capture_output=True,
     ).stdout
-    for hd in _cpp_head:
-        out = out.replace(hd, "")
-    # we don't use cpp -P but remove line directives because otherwise some
-    # empty lines are missing at the beginning
-    # + we remove comments
-    return "".join(
-        (line.split("#", 1)[0]).rstrip() + "\n"
-        for line in out.splitlines()
-        if not _line_dir.match(line)
-    )
+    out = out.split('# 1 "<stdin>"\n')[-1]
+    return "".join((line.split("#", 1)[0]).rstrip() + "\n" for line in out.splitlines())
+
+
+#
+# Python AST handlers
+#
+
+
+class Py2Z3(ast.NodeVisitor):
+    def __init__(self, zvars: dict[str, int | z3.ArithRef]):
+        self.z = zvars
+
+    def visit_Expression(self, node: ast.Expression):
+        return self.visit(node.body)
+
+    _BoolOp = {"And": z3.And, "Or": z3.Or}
+
+    def visit_BoolOp(self, node: ast.BoolOp):
+        name = node.op.__class__.__name__
+        assert name in self._BoolOp or _error(
+            node.lineno, node.col_offset, f"unsupported operator '{ast.unparse(node)}'"
+        )
+        return self._BoolOp[name](*(self.visit(val) for val in node.values))
+
+    _CmpOp = {
+        "Lt": operator.lt,
+        "LtE": operator.le,
+        "Gt": operator.gt,
+        "GtE": operator.ge,
+        "Eq": operator.eq,
+        "NotEq": operator.ne,
+    }
+
+    def visit_Compare(self, node: ast.Compare):
+        cmp = []
+        left = self.visit(node.left)
+        for op, right in zip(node.ops, node.comparators):
+            _right = self.visit(right)
+            name = op.__class__.__name__
+            assert name in self._CmpOp or _error(
+                node.lineno,
+                node.col_offset,
+                f"unsupported operator '{ast.unparse(op)}'",
+            )
+            cmp.append(self._CmpOp[name](left, _right))
+            left = _right
+        return z3.And(*cmp)
+
+    def visit_Constant(self, node: ast.Constant):
+        return cast(int, node.value)
+
+    def visit_Name(self, node: ast.Name):
+        return self.z[node.id]
+
+    _BinOp = {
+        "Add": operator.add,
+        "Sub": operator.sub,
+        "Mult": operator.mul,
+        "Div": operator.truediv,
+        "FloorDiv": operator.truediv,
+        "Mod": operator.mod,
+    }
+
+    def visit_BinOp(self, node: ast.BinOp):
+        name = node.op.__class__.__name__
+        assert name in self._BinOp or _error(
+            node.lineno, node.col_offset, f"unsupported operator '{ast.unparse(node)}'"
+        )
+        return self._BinOp[name](self.visit(node.left), self.visit(node.right))
+
+    _UnaryOp = {
+        "Not": z3.Not,
+        "UAdd": lambda x: 0 + x,
+        "USub": lambda x: 0 - x,
+    }
+
+    def visit_UnaryOp(self, node: ast.UnaryOp):
+        name = node.op.__class__.__name__
+        assert name in self._UnaryOp or _error(
+            node.lineno, node.col_offset, f"unsupported operator '{ast.unparse(node)}'"
+        )
+        return self._UnaryOp[name](self.visit(node.operand))  # type: ignore
+
+
+class Binder(ast.NodeTransformer):
+    def __init__(self, vv):
+        self.v = vv
+
+    def visit_Name(self, node: ast.Name):
+        if node.id in self.v:
+            return ast.Constant(self.v[node.id])
+        else:
+            return node
 
 
 #
@@ -73,63 +151,110 @@ def cpp(text, **var):
 #
 
 
-def dictfield():
-    return field(default_factory=dict)
+class ModItem(StrEnum):
+    VAR = "variable"
+    CON = "constraint"
+    RUL = "rule"
+    CLK = "clock"
 
 
-@dataclass(unsafe_hash=True)
+class Path(tuple[str]):
+    def __truediv__(self, other: tuple[str] | str):
+        if isinstance(other, str):
+            return Path(self + (other,))
+        else:
+            return Path(self + other)
+
+    def __matmul__(self, other: tuple[int | None, ...]) -> tuple[str | int, ...]:
+        return tuple(v for v in chain(*zip(self, other)) if v is not None)
+
+
+@dataclass(frozen=True)
 class _Element:
-    def _error(self, message, errcls=ParseError):
+    def _error(self, message, errcls=ParseError) -> NoReturn:
         line = getattr(self, "line")
         column = getattr(self, "column", None)
         _error(line, column, message, errcls)
 
-    def _assert(self, test, message, errcls=ParseError):
-        line = getattr(self, "line")
-        column = getattr(self, "column", None)
-        _assert(test, line, column, message, errcls)
 
-
-@dataclass(unsafe_hash=True)
+@dataclass(frozen=True)
 class VarDecl(_Element):
     line: int  # source line number
     name: str  # variable name
-    domain: Set[int]  # variable domain (possible values)
-    size: Optional[int]  # if not None: array length
-    init: Union[
-        None,  # omega clock
-        Set[int],  # non-array initial values
-        Tuple[Set[int], ...],
-    ]  # array initial values
+    domain: frozenset[int]  # variable domain (possible values)
+    size: int | None  # if not None: array length
+    init: (
+        None | frozenset[int] | tuple[frozenset[int], ...]
+    )  # omega clock | non-array initial values | array initial values
     description: str  # textual description
     isbool: bool  # Boolean or int variable
-    clock: Optional[str] = None  # name of clock that tick it
+    clock: str | None = None  # name of clock that tick it
+    loc: "Location" = field(init=False, repr=False, hash=False, compare=False)
 
     def __post_init__(self):
-        self._assert(self.size is None or self.size > 0, "invalid size")
+        assert self.size is None or self.size > 0 or self._error("invalid size")
+        super().__setattr__("domain", frozenset(self.domain))
         if self.size is None:
-            self.init = self._init_dom(self.init)
+            assert not isinstance(self.init, tuple) or self._error(
+                f"invalid initial state for non-array variable {self.init}"
+            )
+            super().__setattr__("init", self._init_dom(self.init))
+        elif isinstance(self.init, Sequence):
+            assert len(self.init) == self.size or self._error(
+                "array/init size mismatch"
+            )
+            super().__setattr__(
+                "init",
+                tuple(self._init_dom(i) for i in self.init),
+            )
         else:
-            if isinstance(self.init, Sequence):
-                self._assert(len(self.init) == self.size, "array/init size mismatch")
-                self.init = tuple(self._init_dom(i) for i in self.init)
-            else:
-                self.init = (self._init_dom(self.init),) * self.size
+            super().__setattr__(
+                "init",
+                (self._init_dom(self.init),) * self.size,
+            )
 
-    def _init_dom(self, init):
+    def _init_dom(self, init: None | int | Collection[int]) -> None | frozenset[int]:
         if init is None:
             if self.clock is None:
                 return self.domain
             else:
                 return None
         elif isinstance(init, int):
-            init = {init} & self.domain
-        elif isinstance(init, set):
-            init = init & self.domain
+            assert (intr := frozenset({init}) & self.domain) or self._error(
+                f"invalid initial state {set({init})}"
+            )
+            return intr
         else:
-            self._error(f"invalid initial state {init!r}")
-        self._assert(init, f"invalid initial state {init!r}")
-        return init
+            assert (intr := frozenset(init) & self.domain) or self._error(
+                f"invalid initial state {set(init)}"
+            )
+            return intr
+
+    def make(self, loc: "Location"):
+        super().__setattr__("loc", loc)
+
+    def __matmul__(self, other: tuple[int | None, ...]) -> tuple[str | int, ...]:
+        return self.loc.path @ other
+
+    def __getitem__(self, idx: int):
+        if self.size is None:
+            raise ValueError("non-array variable cannot be indexed")
+        if not 0 <= idx < self.size:
+            raise ValueError("out-of-bound index")
+        new = VarDecl(
+            self.line,
+            f"{self.name}[{idx}]",
+            self.domain,
+            None,
+            self.init
+            if self.init is None or isinstance(self.init, frozenset)
+            else self.init[idx],
+            self.description,
+            self.isbool,
+            self.clock,
+        )
+        super(VarDecl, new).__setattr__("loc", self.loc)
+        return new
 
     def __str__(self):
         if self.size is None:
@@ -179,8 +304,10 @@ class VarDecl(_Element):
             h.write(f"{self.name} = ")
             if self.size is None:
                 self._html_init(h, self.init)
-            elif all(i == self.init[0] for i in self.init):
-                self._html_init(h, self.init[0])
+            elif all(
+                i == cast(tuple[int | frozenset[int]], self.init)[0] for i in self.init
+            ):
+                self._html_init(h, cast(tuple[int | frozenset[int]], self.init)[0])
             else:
                 h.write("(")
                 for n, i in enumerate(self.init):
@@ -205,69 +332,235 @@ class VarDecl(_Element):
             h.write("|".join(f"{i}" for i in init))
 
 
-@dataclass(unsafe_hash=True)
-class VarUse(_Element):
-    line: int  # source line number
-    column: Optional[int]  # source line column
-    name: str  # variable name
-    index: Optional[
-        Union[
-            int,  # constant index
-            str,  # quantified index
-            tuple[str, str, int],
-        ]  # shifted quantified index
-    ] = None  # no var index by default
-    locrel: Optional[str] = None  # variable in other location
-    locname: Optional[str] = None  # inner location name
-    locidx: Optional[
-        Union[
-            int,  # constant index
-            str,  # quantified index
-            tuple[str, str, int],
-        ]  # shifted quantified index
-    ] = None  # no inner loc idx by default
+@dataclass(frozen=True)
+class Expr(_Element):
+    src: str
+    tree: ast.Expression = field(
+        init=False,
+        repr=False,
+        hash=False,
+        compare=False,
+    )
+    names: frozenset[str] = field(
+        init=False,
+        repr=False,
+        hash=False,
+        compare=False,
+    )
+    const: bool = field(init=False, repr=False, hash=False, compare=False)
 
     def __post_init__(self):
-        self._assert(
-            self.locrel in (None, "outer", "inner"),
+        super().__setattr__("tree", ast.parse(self.src, mode="eval"))
+        super().__setattr__(
+            "names",
+            frozenset(
+                node.id for node in ast.walk(self.tree) if isinstance(node, ast.Name)
+            ),
+        )
+        super().__setattr__("const", not self.names)
+        super().__setattr__("src", ast.unparse(self.tree))
+
+    def bind(self, vv):
+        tree = ast.parse(self.src)
+        return Expr(ast.unparse(Binder(vv).visit(tree)))
+
+    def __call__(self, **args: int | z3.ArithRef):
+        if not self.const and any(isinstance(a, z3.ArithRef) for a in args):
+            return self._toz3(args)
+        else:
+            return eval(self.src, args)
+
+    def _toz3(self, zvars: dict[str, int | z3.ArithRef]):
+        trans = Py2Z3(zvars)
+        assert self.tree is not None
+        return trans.visit(self.tree)
+
+    def __str__(self):
+        return self.src
+
+    def __html__(self, h):
+        h.write(re.sub(r"\b[a-z][a-z0-9]*\b", self._html_name, self.src, flags=re.I))
+
+    def _html_name(self, match):
+        return f'<span style="color:#808;">{match.group(0)}</span>'
+
+
+@dataclass(frozen=True)
+class Quanti(_Element):
+    any: frozenset[str] = field(default_factory=frozenset)
+    all: frozenset[str] = field(default_factory=frozenset)
+    cond: Expr | None = None
+
+    def __post_init__(self):
+        if err := self.all & self.any:
+            raise ValueError(
+                f" {', '.join(repr(v) for v in err)} quantified both 'all' and 'any'"
+            )
+        if self.cond and (miss := self.cond.names - (self.any | self.all)):
+            raise ValueError(
+                f" {', '.join(repr(v) for v in err)} used in 'if' but not quantified"
+            )
+
+    def bind(self, vv):
+        vvnames = set(vv)
+        newany = self.any - vvnames
+        newall = self.all - vvnames
+        if newany or newall:
+            return Quanti(
+                newany, newall, None if self.cond is None else self.cond.bind(vv)
+            )
+        else:
+            return None
+
+    def solve(
+        self, *indexes: tuple[Expr, int]
+    ) -> Generator[tuple[dict[str, int], dict[str, set[int]]]]:
+        solver = z3.Solver()
+        zvars = {}
+        for var in self.all | self.any:
+            _var = zvars[var] = z3.Int(var)
+        if self.cond is not None:
+            solver.add(self.cond(**zvars))
+        for expr, size in indexes:
+            _expr = expr(**zvars)
+            solver.add(_expr >= 0, _expr < size)
+        sol: defaultdict[tuple[int, ...], defaultdict[str, set[int]]] = defaultdict(
+            lambda: defaultdict(set)
+        )
+        anyvars = tuple(v for v in sorted(self.any))
+        while solver.check() == z3.sat:
+            mod = solver.model()
+            sub = sol[
+                tuple(cast(z3.IntNumRef, mod[zvars[v]]).as_long() for v in anyvars)
+            ]
+            for var in self.all:
+                sub[var].add(cast(z3.IntNumRef, mod[zvars[var]]).as_long())
+            solver.add(z3.Or(*(z != mod[z] for z in zvars.values())))
+        assert sol or self._error(
+            "quantification yields no solutions", errcls=BindError
+        )
+        for key, val in sol.items():
+            assert all(v for v in val.values()) or self._error(
+                "quantification yields not solutions", errcls=BindError
+            )
+            yield dict(zip(anyvars, key)), dict(val)
+
+    def __str__(self):
+        parts = []
+        if self.all:
+            parts.extend(["for all", ", ".join(self.all)])
+        if self.any:
+            parts.extend(["for any", ", ".join(self.any)])
+        if self.cond is not None:
+            parts.extend(["if", str(self.cond)])
+        return " ".join(parts)
+
+    def __html__(self, h):
+        if self.all:
+            with h("span", style="color:#008; font-weight:bold;"):
+                h.write("for all")
+            h.write(" " + ", ".join(self.all))
+        if self.any:
+            if self.all:
+                h.write(" ")
+            with h("span", style="color:#008; font-weight:bold;"):
+                h.write("for any")
+            h.write(" " + ", ".join(self.any))
+        if self.cond is not None:
+            h.write(" ")
+            with h("span", style="color:#008; font-weight:bold;"):
+                h.write("if")
+            h.write(f" {self.cond}")
+
+
+@dataclass(frozen=True)
+class VarUse(_Element):
+    line: int  # source line number
+    column: int | None  # source line column
+    name: str  # variable name
+    index: int | Expr | None = None  # constant index | expr index | no index
+    locrel: Literal[None, "outer", "inner"] = None  # variable in same/other location
+    locname: str | None = None  # inner location name
+    locidx: int | Expr | None = None  # constant index | expr index | no index
+    decl: VarDecl = field(
+        init=False, repr=False, hash=False, compare=False
+    )  # var declaration
+    names: set[str] = field(
+        init=False, repr=False, hash=False, compare=False
+    )  # free names in indexes
+
+    def __post_init__(self):
+        assert self.locrel in (None, "outer", "inner") or self._error(
             f"invalid location relation {self.locrel!r}",
         )
-        self._assert(
-            self.locname is None if self.locrel is None else True,
-            "locname should be None",
+        assert (
+            self.locrel is not None
+            or self.locname is None
+            or self._error(
+                "locname should be None",
+            )
         )
-        self._assert(
-            self.locidx is None if self.locrel is None else True,
-            "locidx should be None",
+        assert (
+            self.locrel is not None
+            or self.locidx is None
+            or self._error(
+                "locidx should be None",
+            )
         )
-        self._assert(
-            self.locname is None if self.locrel == "outer" else True,
-            "outer location cannot be named",
+        assert (
+            self.locrel is not None
+            or self.locname is None
+            or self._error(
+                "outer location cannot be named",
+            )
         )
-        self._assert(
-            self.locidx is None if self.locrel == "outer" else True,
-            "outer location cannot be indexed",
+        assert (
+            self.locrel != "outer"
+            or self.locidx is None
+            or self._error(
+                "outer location cannot be indexed",
+            )
         )
-        self._assert(
-            self.locname is not None if self.locrel == "inner" else True,
-            "missing value for locname",
+        assert (
+            self.locrel != "inner"
+            or self.locname is not None
+            or self._error(
+                "missing value for locname",
+            )
         )
+        if isinstance(self.index, Expr) and self.index.const:
+            super().__setattr__("index", self.index())
+        if isinstance(self.locidx, Expr) and self.locidx.const:
+            super().__setattr__("locidx", self.locidx())
+        super().__setattr__(
+            "names",
+            self.index.names
+            if isinstance(self.index, Expr)
+            else set() | self.locidx.names
+            if isinstance(self.locidx, Expr)
+            else set(),
+        )
+
+    def __matmul__(self, other: tuple[int | None, ...]) -> tuple[str | int, ...]:
+        path = self.decl @ other
+        if isinstance(self.locidx, int) and self.locname is not None:
+            return path + (self.locname, self.locidx)
+        elif self.locname is not None:
+            return path + (self.locname,)
+        else:
+            return path
 
     def __str__(self):
         if self.index is None:
             idx = ""
-        elif isinstance(self.index, tuple):
-            idx = f"[{''.join(str(i) for i in self.index)}]"
         else:
             idx = f"[{self.index}]"
         if self.locrel is None:
             at = ""
         elif self.locrel == "outer":
-            at = f"@@"
+            at = "@@"
         elif self.locidx is None:
             at = f"@{self.locname}"
-        elif isinstance(self.locidx, tuple):
-            at = f"@{self.locname}[{''.join(str(i) for i in self.locidx)}]"
         else:
             at = f"@{self.locname}[{self.locidx}]"
         return f"{self.name}{idx}{at}"
@@ -276,137 +569,160 @@ class VarUse(_Element):
         h.write(self.name)
         if self.index is not None:
             with h("span", style="color:#808;"):
-                if isinstance(self.index, tuple):
-                    h.write(f"[{''.join(str(i) for i in self.index)}]")
-                else:
-                    h.write(f"[{self.index}]")
+                h.write(f"[{self.index}]")
         if self.locrel is not None:
             with h("span", style="color:#088;"):
                 if self.locrel == "outer":
-                    h.write(f"@@")
+                    h.write("@@")
                 else:
                     h.write(f"@{self.locname}")
             if self.locidx is not None:
                 with h("span", style="color:#808;"):
-                    if isinstance(self.locidx, tuple):
-                        h.write(f"[{''.join(str(i) for i in self.locidx)}]")
-                    else:
-                        h.write(f"[{self.locidx}]")
+                    h.write(f"[{self.locidx}]")
 
-    def make(self, loc, index):
+    def make(self, loc: "Location"):
         if self.locrel is None:
-            self._assert(self.name in loc.var, f"no local variable {self.name}")
-            self.decl = loc.var[self.name]
+            assert self.name in loc.var or self._error(f"no local variable {self.name}")
+            super().__setattr__("decl", loc.var[self.name])
         elif self.locrel == "outer":
-            self._assert(loc.parent is not None, "no outer location")
-            self._assert(self.name in loc.parent.var, f"no outer variable {self.name}")
-            self.decl = loc.parent.var[self.name]
+            assert loc.parent is not None or self._error("no outer location")
+            assert self.name in loc.parent.var or self._error(
+                f"no outer variable {self.name}"
+            )
+            super().__setattr__("decl", loc.parent.var[self.name])
         else:
-            self._assert(self.locname in loc.sub, f"no inner location {self.locname!r}")
-            self._assert(
-                self.name in loc.sub[self.locname].var,
+            assert self.locname in loc.sub or self._error(
+                f"no inner location {self.locname!r}"
+            )
+            assert self.name in loc.sub[self.locname].var or self._error(
                 f"no variable {self.name} in {self.locname}",
             )
-            self._assert(
-                loc.sub[self.locname].size is not None
-                if self.locidx is not None
-                else True,
+            assert (
+                loc.sub[self.locname].size is None
+                or self.locidx is not None
+                or self._error(
+                    f"indexing non-array location {self.locname!r}",
+                )
+            )
+            assert (
+                self.locidx is None
+                or loc.sub[self.locname].size is not None
+                or self._error(
+                    f"invalid index for {self.locname!r}[{loc.sub[self.locname].size}]",
+                )
+            )
+            assert (
+                not isinstance(self.locidx, int)
+                or (
+                    self.decl.loc is not None
+                    and self.decl.loc.size is not None
+                    and 0 <= self.locidx < self.decl.loc.size
+                )
+                or self._error(f"location index '{self.locidx}' out of range")
+            )
+            super().__setattr__("decl", loc.sub[self.locname].var[self.name])
+        assert (
+            self.index is None
+            or ((decl := self.decl) is not None and decl.size is not None)
+            or self._error("cannot index non-array variable")
+        )
+        assert (
+            not isinstance(self.index, int)
+            or (
+                self.decl is not None
+                and (decl := self.decl) is not None
+                and decl.size is not None
+                and self.index
+                and 0 <= decl.size < self.index
+            )
+            or self._error("index '{self.index}' out of range")
+        )
+        assert (
+            self.locidx is None
+            or ((locdecl := self.decl.loc) is not None and locdecl.size is not None)
+            or self._error(
                 f"indexing non-array location {self.locname!r}",
             )
-            self._assert(
-                0 <= self.locidx < loc.sub[self.locname].size
-                if isinstance(self.locidx, int)
-                else True,
-                f"invalid index for {self.locname!r}[{loc.sub[self.locname].size}]",
-            )
-            self.decl = loc.sub[self.locname].var[self.name]
-        if isinstance(self.index, str) and self.index != "self":
-            index.setdefault(self.index, set(self.decl.domain))
-            index[self.index] &= self.decl.domain
-        elif isinstance(self.index, tuple) and self.index[0] != "self":
-            index.setdefault(self.index[0], set(self.decl.domain))
-            index[self.index[0]] &= self.decl.domain
-        if isinstance(self.locidx, str):
-            index.setdefault(self.locidx, set(range(loc.sub[self.locname].size)))
-            index[self.locidx] &= set(range(loc.sub[self.locname].size))
-        elif isinstance(self.locidx, tuple):
-            index.setdefault(self.locidx[0], set(range(loc.sub[self.locname].size)))
-            index[self.locidx[0]] &= set(range(loc.sub[self.locname].size))
+        )
 
-    def _bind_index(self, index, vals, doms):
-        if index is None:
-            return None
-        elif isinstance(index, int):
-            return index
-        elif isinstance(index, str):
-            if index not in vals:
-                return index
-            elif index == "self":
-                return vals["self"]
-            elif (ret := vals[index]) in doms[index]:
-                return ret
-        elif index[0] in vals:
-            idx = vals[index[0]]
-            if index[1] == "+":
-                if (ret := idx + index[2]) in doms[index[0]]:
-                    return ret
-            elif index[1] == "-":
-                if (ret := idx - index[2]) in doms[index[0]]:
-                    return ret
-        raise BindError("unsupported index {index!r}")
+    @cached_property
+    def indexes(self) -> frozenset[tuple[Expr, int]]:
+        return (
+            frozenset([(self.locidx, cast(int, self.decl.loc.size))])
+            if isinstance(self.locidx, Expr)
+            else frozenset() | frozenset([(self.index, cast(int, self.decl.size))])
+            if isinstance(self.index, Expr)
+            else frozenset()
+        )
 
-    def bind(self, vals, doms):
-        var = VarUse(
+    def bind(self, vv):
+        new = VarUse(
             self.line,
             self.column,
             self.name,
-            self._bind_index(self.index, vals, doms),
+            self.index
+            if self.index is None or isinstance(self.index, int)
+            else self.index.bind(vv),
             self.locrel,
             self.locname,
-            self._bind_index(self.locidx, vals, doms),
+            self.locidx
+            if self.locidx is None or isinstance(self.locidx, int)
+            else self.locidx.bind(vv),
         )
-        var.decl = self.decl
-        return var
-
-    def gal(self, path):
-        if self.decl.isbool:
-            vtype = "bool"
-        elif self.decl.clock is not None:
-            vtype = "clock"
-        else:
-            vtype = "int"
-        if self.index is None:
-            name = self.name
-        else:
-            name = f"{self.name}.{self.index}"
-        if self.locrel is None:
-            where = ".".join(path) + ("." if path else "")
-        elif self.locrel == "outer":
-            where = ".".join(path[:-1]) + ("." if path[:-1] else "")
-        else:
-            where = ".".join(path) + ("." if path else "") + f"{self.locname}."
-        if self.locidx is not None:
-            where += f"{self.locidx}."
-        return f"{vtype}_{where}{name}"
-
-    def vars(self, path):
-        if self.locrel is None:
-            yield path, self
-        elif self.locrel == "outer":
-            yield path[:-1], self
-        elif self.locidx is None:
-            yield path + [self.locname], self
-        else:
-            yield path + [f"{self.locname}[]"], self
+        super(VarUse, new).__setattr__("decl", self.decl)
+        return new
 
 
-@dataclass(unsafe_hash=True)
+def _sp_sub(a, b):
+    return sp.Add(a, -b)
+
+
+@dataclass(frozen=True)
 class BinOp(_Element):
     line: int  # source line number
-    column: Optional[int]  # source line column
-    left: Union[VarUse, int]  # expression left-hand side
+    column: int | None  # source line column
+    left: VarUse | int  # expression left-hand side
     op: str  # infix operator
-    right: Union[VarUse, Self, int, None]  # expression right-hand side
+    right: VarUse | Self | int | None  # expression right-hand side
+    names: frozenset[str] = field(init=False, repr=False, hash=False, compare=False)
+
+    def __post_init__(self):
+        super().__setattr__(
+            "names",
+            self.left.names
+            if isinstance(self.left, VarUse)
+            else set() | self.right.names
+            if isinstance(self.right, (VarUse, BinOp))
+            else set(),
+        )
+
+    _sp_op = {
+        "==": sp.Eq,
+        "!=": sp.Ne,
+        "<": sp.Lt,
+        "<=": sp.Le,
+        ">": sp.Gt,
+        ">=": sp.Ge,
+        "=": sp_Assign,
+        "+": sp.Add,
+        "-": _sp_sub,
+    }
+
+    def sympy(
+        self, star: str | int | sp.Expr, vname: Callable[[VarUse], str]
+    ) -> sp.Expr:
+        _star = sp.Symbol(star) if isinstance(star, str) else star
+        args: list[int | sp.Symbol | sp.Expr] = []
+        for a in [self.left, self.right]:
+            if a is None:
+                args.append(_star)
+            elif isinstance(a, int):
+                args.append(a)
+            elif isinstance(a, VarUse):
+                args.append(sp.Symbol(vname(a)))
+            else:
+                args.append(a.sympy(_star, vname))
+        return self._sp_op[self.op](*args)
 
     def __str__(self):
         right = self.right if self.right is not None else "*"
@@ -415,7 +731,8 @@ class BinOp(_Element):
     def __html__(self, h):
         if (
             isinstance(self.left, VarUse)
-            and self.left.decl.isbool
+            and (decl := self.left.decl) is not None
+            and decl.isbool
             and self.op == "=="
             and self.right in (0, 1)
         ):
@@ -443,60 +760,66 @@ class BinOp(_Element):
             else:
                 self.right.__html__(h)
 
-    def make(self, loc, index):
+    def make(self, loc: "Location"):
         if isinstance(self.left, VarUse):
-            self.left.make(loc, index)
-        if isinstance(self.right, VarUse):
-            self.right.make(loc, index)
-        if self.right is None:
-            self._assert(
-                isinstance(self.left, VarUse) and self.left.decl.clock is not None,
-                f"cannot assign '*' to non-clocked variable",
+            self.left.make(loc)
+        if isinstance(self.right, (VarUse, BinOp)):
+            self.right.make(loc)
+        assert (
+            self.right is not None
+            or (
+                isinstance(self.left, VarUse)
+                and self.left.decl is not None
+                and self.left.decl.clock is not None
             )
+            or self._error(
+                "cannot assign '*' to non-clocked variable",
+            )
+        )
 
-    def bind(self, vals, doms):
+    @cached_property
+    def indexes(self) -> frozenset[tuple[Expr, int]]:
+        return (
+            self.left.indexes
+            if isinstance(self.left, VarUse)
+            else frozenset() | self.right.indexes
+            if isinstance(self.right, (VarUse, BinOp))
+            else frozenset()
+        )
+
+    def bind(self, vv):
         return BinOp(
             self.line,
             self.column,
-            self.left if isinstance(self.left, int) else self.left.bind(vals, doms),
+            self.left if isinstance(self.left, int) else self.left.bind(vv),
             self.op,
             self.right
             if isinstance(self.right, int) or self.right is None
-            else self.right.bind(vals, doms),
+            else self.right.bind(vv),
         )
 
-    def gal(self, loc):
-        left = f"{self.left}" if isinstance(self.left, int) else self.left.gal(loc)
-        if self.right is None:
-            right = -1
-        elif isinstance(self.right, int):
-            right = self.right
-        else:
-            right = self.right.gal(loc)
-        if isinstance(self.right, BinOp):
-            return f"{left} {self.op} ({right})"
-        else:
-            return f"{left} {self.op} {right}"
 
-    def vars(self, path):
-        if isinstance(self.left, VarUse):
-            yield from self.left.vars(path)
-        if isinstance(self.right, (VarUse, BinOp)):
-            yield from self.right.vars(path)
-
-
-@dataclass(unsafe_hash=True)
+@dataclass(frozen=True)
 class Assignment(_Element):
     line: int  # source line number
-    column: Optional[int]  # source line column
+    column: int | None  # source line column
     target: VarUse  # assigned variable
-    value: Union[VarUse, BinOp, int, None]  # expression assigned to variable
+    value: VarUse | BinOp | int | None  # expression assigned to variable
+    names: frozenset[str] = field(init=False, repr=False, hash=False, compare=False)
+
+    def __post_init__(self):
+        super().__setattr__(
+            "names",
+            self.target.names | self.value.names
+            if isinstance(self.value, (VarUse, BinOp))
+            else set(),
+        )
 
     def __str__(self):
         return f"{self.target}={self.value if self.value is not None else '*'}"
 
     def __html__(self, h):
-        if self.target.decl.isbool:
+        if (decl := self.target.decl) is not None and decl.isbool:
             if self.value == 0:
                 with h("span", style="color:#800;"):
                     self.target.__html__(h)
@@ -518,75 +841,113 @@ class Assignment(_Element):
                 h.write(f"=")
                 self.value.__html__(h)
 
-    def make(self, loc, index):
-        self.target.make(loc, index)
+    def make(self, loc: "Location"):
+        self.target.make(loc)
         if self.value is None:
-            self._assert(
-                self.target.decl.clock is not None,
+            assert (
+                self.target.decl is not None and self.target.decl.clock is not None
+            ) or self._error(
                 "cannot assign '*' to non clocked variable",
             )
-        elif not isinstance(self.value, int):
-            self.value.make(loc, index)
-        self._assert(
-            not isinstance(self.value, int)
-            or self.value is None
-            or self.value in self.target.decl.domain,
-            f"out-of-domain assignment {self}",
+        elif isinstance(self.value, int):
+            assert (
+                self.target.decl is not None and self.value in self.target.decl.domain
+            ) or self._error(
+                f"out-of-domain assignment {self}",
+            )
+        else:
+            self.value.make(loc)
+
+    @cached_property
+    def indexes(self) -> frozenset[tuple[Expr, int]]:
+        return (
+            self.target.indexes | self.value.indexes
+            if isinstance(self.value, (VarUse, BinOp))
+            else frozenset()
         )
 
-    def bind(self, vals, doms):
+    def bind(self, vals):
         return Assignment(
             self.line,
             self.column,
-            self.target.bind(vals, doms),
+            self.target.bind(vals),
             self.value
             if isinstance(self.value, int) or self.value is None
-            else self.value.bind(vals, doms),
+            else self.value.bind(vals),
         )
 
-    def gal(self, loc):
-        tgt = self.target.gal(loc)
-        if self.value is None:
-            yield f"{tgt} = -1;"
-        elif isinstance(self.value, int):
-            yield f"{tgt} = {self.value};"
-        else:
-            yield f"{tgt} = {self.value.gal(loc)};"
-            yield f"if ({tgt} < {min(self.target.decl.domain)}) {{ abort; }}"
-            yield f"if ({tgt} > {max(self.target.decl.domain)}) {{ abort; }}"
 
-    def cond(self):
-        return BinOp(self.line, self.column, self.target, "==", self.value)
-
-    def vars(self, path):
-        yield from self.target.vars(path)
-        if isinstance(self.value, (VarUse, BinOp)):
-            yield from self.value.vars(path)
-
-
-@dataclass(unsafe_hash=True)
+@dataclass(frozen=True)
 class Action(_Element):
     line: int  # source line number
-    left: Tuple[BinOp, ...]  # conditions
-    right: Tuple[Assignment, ...]  # assignments
-    tags: Tuple[str, ...] = ()  # tags
-    quantifier: dict = dictfield()  # free indexes quantifiers
-    index: dict = dictfield()  # free indexes domains
+    left: tuple[BinOp, ...]  # conditions
+    right: tuple[Assignment, ...]  # assignments
+    tags: tuple[str, ...] = ()  # tags
+    quantifier: Quanti | None = None  # free indexes quantifiers
+    name: str = field(
+        init=False, repr=False, hash=False, compare=False
+    )  # unique name within location
+    bound: dict[str, int | set[int]] = field(
+        default_factory=dict, init=False, repr=False, hash=False, compare=False
+    )  # bound names
+    names: frozenset[str] = field(
+        init=False, repr=False, hash=False, compare=False
+    )  # names used in indexes
+    loc: "Location" = field(init=False, repr=False, hash=False, compare=False)
+
+    def __post_init__(self):
+        super().__setattr__(
+            "names",
+            reduce(operator.or_, (lr.names for lr in self.left + self.right), set()),
+        )
+        assert (
+            self.quantifier is not None
+            or not (miss := self.names - {"self"})
+            or self._error(f"{','.join(miss)} not quantified")
+        )
+        assert (
+            self.quantifier is None
+            or not (miss := (self.quantifier.any | self.quantifier.all) - self.names)
+            or self._error(f"{','.join(miss)} quantified but not used")
+        )
+        assert (
+            self.quantifier is None
+            or not (
+                miss := self.names
+                - (self.quantifier.all | self.quantifier.any | {"self"})
+            )
+            or self._error(f"{','.join(miss)} not quantified")
+        )
+
+    @cached_property
+    def indexes(self) -> frozenset[tuple[Expr, int]]:
+        return frozenset(
+            chain.from_iterable(lr.indexes for lr in self.left + self.right),
+        )
+
+    @cached_property
+    def boundname(self):
+        "name with bound free variables"
+        assert self.name is not None or self._error("action should ne named")
+        if self.bound:
+            b = [
+                f"{k}={v}"
+                if isinstance(v, int)
+                else f"{k}={{{','.join(str(i) for i in v)}}}"
+                for k, v in self.bound.items()
+            ]
+            return f"{self.name}[{','.join(b)}]"
+        else:
+            return self.name
 
     def __str__(self):
-        q = []
-        if qall := [v for v, q in self.quantifier.items() if q == "all"]:
-            q.append("for all " + ", ".join(qall))
-        if qany := [v for v, q in self.quantifier.items() if q == "any"]:
-            q.append("for any " + ", ".join(qany))
         return "".join(
             [
                 f"[{', '.join(self.tags)}] " if self.tags else "",
                 ", ".join(str(c) for c in self.left),
                 " >> ",
                 ", ".join(str(a) for a in self.right),
-                " " if q else "",
-                ", ".join(q),
+                "" if self.quantifier is None else f" {self.quantifier}",
             ]
         )
 
@@ -605,26 +966,17 @@ class Action(_Element):
             if i:
                 h.write(", ")
             assign.__html__(h)
-        comma = False
-        for q in ("all", "any"):
-            if quanti := [k for k, v in self.quantifier.items() if v == q]:
-                if comma:
-                    h.write(",")
-                h.write(" ")
-                with h("span", style="color:#008; font-weight:bold;"):
-                    h.write(f"for {q}")
-                h.write(" " + ", ".join(quanti))
-                comma = True
+        if self.quantifier is not None:
+            h.write(" ")
+            self.quantifier.__html__(h)
 
-    def make(self, loc):
+    def make(self, loc: "Location", name: str):
+        super().__setattr__("name", name)
+        super().__setattr__("loc", loc)
         for cond in self.left:
-            cond.make(loc, self.index)
+            cond.make(loc)
         for assign in self.right:
-            assign.make(loc, self.index)
-        if (idx := set(self.index)) < (quanti := set(self.quantifier)):
-            self._error(f"unknown domains for {', '.join(quanti - idx)}")
-        elif idx > quanti:
-            self._error(f"missing quantifier for {', '.join(idx - quanti)}")
+            assign.make(loc)
         assigned = set()
         for a in self.right:
             if (
@@ -633,78 +985,115 @@ class Action(_Element):
                 a.target.locidx,
                 a.target.index,
             ) in assigned:
-                self._error(f"variable {a.target.name!r} assigned twice")
+                self._error(f"'{a.target}' assigned twice")
             assigned.add(
                 (a.target.name, a.target.locname, a.target.locidx, a.target.index)
             )
 
-    def expand_any(self, binding={}):
-        if not any(q == "any" for q in self.quantifier.values()):
-            yield self.bind(binding).expand_all(), None
+    def expand(self, locidx: int | None):
+        if locidx is None:
+            vv = {}
+            sb = self
         else:
-            names = [v for v, q in self.quantifier.items() if q == "any"]
-            for prod in product(*(self.index[v] for v in names)):
-                vals = dict(zip(names, prod))
-                vals.update(binding)
-                try:
-                    yield self.bind(vals).expand_all(), vals
-                except BindError:
-                    pass
+            vv = {"self": locidx}
+            sb = self.bind(vv)
+        if self.quantifier is None:
+            yield sb
+        else:
+            for vany, vall in self.quantifier.solve(*self.indexes):
+                new = self.bind(vv | vany)
+                if vall:
+                    yield new._expand_all(vall)
+                else:
+                    yield new
 
-    def bind(self, vals):
-        return Action(
+    def bind(self, vv: dict[str, int]):
+        new = Action(
             self.line,
-            tuple(left.bind(vals, self.index) for left in self.left),
-            tuple(right.bind(vals, self.index) for right in self.right),
+            tuple(left.bind(vv) for left in self.left),
+            tuple(right.bind(vv) for right in self.right),
             self.tags,
-            {v: q for v, q in self.quantifier.items() if v not in vals},
-            {v: d for v, d in self.index.items() if v not in vals},
+            None if self.quantifier is None else self.quantifier.bind(vv),
         )
+        super(Action, new).__setattr__("name", self.name)
+        super(Action, new).__setattr__("loc", self.loc)
+        super(Action, new).__setattr__(
+            "bound", self.bound | {k: v for k, v in vv.items() if k in self.names}
+        )
+        return new
 
-    def expand_all(self):
-        doms = {v: self.index[v] for v, q in self.quantifier.items() if q == "all"}
-        names = list(doms)
-        expand = {}
-        for side in ("left", "right"):
-            newside = defaultdict(set)
-            oldside = getattr(self, side)
-            for item in oldside:
-                for prod in product(*(doms[n] for n in names)):
-                    vals = dict(zip(names, prod))
-                    try:
-                        newside[item].add(item.bind(vals, doms))
-                    except BindError:
-                        pass
-            expand[side] = reduce(or_, newside.values())
-        return Action(
+    def _expand_all(self, vv: dict[str, set[int]]):
+        if self.quantifier is None:
+            return self
+        bound = self.quantifier.all & set(vv)
+        assert not (free := self.quantifier.all - bound) or self._error(
+            f"{','.join(free)} not bound"
+        )
+        assert not self.quantifier.any or self._error(
+            "cannot expand any quantified action"
+        )
+        sides = SimpleNamespace(left=self.left, right=self.right)
+        for sd in ("left", "right"):
+            for var in bound:
+                old = getattr(sides, sd)
+                new: list[BinOp | Assignment] = []
+                for item in old:
+                    if var in item.names:
+                        new.extend(item.bind({var: v}) for v in vv[var])
+                    else:
+                        new.append(item)
+                setattr(sides, sd, tuple(new))
+        act = Action(
             self.line,
-            expand["left"],
-            expand["right"],
+            sides.left,
+            sides.right,
             self.tags,
-            {v: q for v, q in self.quantifier.items() if v not in doms},
-            {v: d for v, d in self.index.items() if v not in doms},
+            None,
         )
+        super(Action, act).__setattr__("name", self.name)
+        super(Action, act).__setattr__("loc", self.loc)
+        super(Action, act).__setattr__(
+            "bound", self.bound | cast(dict[str, int | set[int]], vv)
+        )
+        return act
 
 
-@dataclass(unsafe_hash=True)
+@dataclass(frozen=True)
 class Location(_Element):
     line: int  # source line number
-    variables: Tuple[VarDecl, ...]  # local variables
-    constraints: Tuple[Action, ...]  # constraints
-    rules: Tuple[Action, ...]  # rules
-    locations: Tuple["Location", ...]  # nested locations
-    name: Optional[str] = None  # name if nested
-    size: Optional[int] = None  # size of array
-    clocks: Dict[str, str] = dictfield()  # clock names -> description
+    variables: tuple[VarDecl, ...]  # local variables
+    constraints: tuple[Action, ...]  # constraints
+    rules: tuple[Action, ...]  # rules
+    locations: tuple[Self, ...]  # nested locations
+    name: str | None = None  # name if nested
+    size: int | None = None  # size of array
+    parent: Self | None = field(init=False, repr=False, hash=False, compare=False)
+    clocks: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False, hash=False, compare=False
+    )
+    clocked: dict[str, list[VarDecl]] = field(
+        default_factory=dict, init=False, repr=False, hash=False, compare=False
+    )
+
+    @cached_property
+    def path(self) -> Path:
+        if self.parent is None:
+            return Path()
+        assert self.name is not None
+        return self.parent.path / self.name
+
+    @cached_property
+    def sub(self):
+        "sub-locations by name"
+        return {loc.name: loc for loc in self.locations}
+
+    @cached_property
+    def var(self):
+        "variables by name"
+        return {v.name: v for v in self.variables}
 
     def __post_init__(self):
-        self._assert(self.size is None or self.size > 0, "invalid array size")
-        self.variables = tuple(self.variables)
-        self.constraints = tuple(self.constraints)
-        self.rules = tuple(self.rules)
-        self.locations = tuple(self.locations)
-        self.sub = {loc.name: loc for loc in self.locations}
-        self.var = {v.name: v for v in self.variables}
+        assert self.size is None or self.size > 0 or self._error("invalid array size")
 
     def __str__(self):
         parts = ["@"]
@@ -774,37 +1163,66 @@ class Location(_Element):
         yield from self.constraints
         yield from self.rules
 
-    def __iter__(self):
-        yield from self._iter()
-
-    def _iter(self, path=[]):
-        yield path, self
-        for loc in self.locations:
-            if loc.size:
-                yield from loc._iter(path + [f"{loc.name}[]"])
-            else:
-                yield from loc._iter(path + [loc.name])
-
-    def make(self, top=None, parent=None, path=[]):
-        self.parent = parent
+    def make(self, top=None, parent=None):
+        super().__setattr__("parent", parent)
         if top is None:
             top = self
         for var in self.variables:
+            var.make(self)
             if var.clock:
-                var._assert(
-                    var.clock in top.clocks, f"clock {var.clock} is not defined"
+                assert var.clock in top.clocks or self._error(
+                    f"clock {var.clock} is not defined"
                 )
                 top.clocked[var.clock].append(var)
         for loc in self.locations:
-            if loc.size is None:
-                sub = path + [loc.name]
-            else:
-                sub = path + [f"{loc.name}[]"]
-            loc.make(top, self, sub)
+            loc.make(top, self)
         for kind in ("constraints", "rules"):
             for num, act in enumerate(getattr(self, kind), start=1):
-                act.make(self)
-                act.name = ".".join(path + [f"{kind[0].upper()}{num}"])
+                cast(Action, act).make(self, f"{kind[0].upper()}{num}")
+        for k, v in self.clocked.items():
+            assert v or self._error(f"clock {k} not used")
+
+    def _flatten(
+        self,
+        *locidx: int | None,
+    ) -> Generator[tuple[ModItem, tuple[int | None, ...], VarDecl | Action]]:
+        for var in self.variables:
+            if var.size is not None:
+                for idx in range(var.size):
+                    yield ModItem.VAR, locidx, var[idx]
+            else:
+                yield ModItem.VAR, locidx, var
+        for loc in self.locations:
+            if loc.size is not None:
+                for idx in range(loc.size):
+                    yield from loc._flatten(*locidx, idx)
+            else:
+                yield from loc._flatten(*locidx, None)
+        for kind, group in (
+            (ModItem.CON, self.constraints),
+            (ModItem.RUL, self.rules),
+        ):
+            for act in group:
+                last = locidx[-1] if locidx else None
+                for a in act.expand(last):
+                    yield kind, locidx, a
+
+    def flatten(
+        self,
+    ) -> Generator[
+        tuple[
+            ModItem,
+            tuple[int | None, ...] | str,
+            VarDecl | Action | list[tuple[tuple[int | None, ...], VarDecl]],
+        ]
+    ]:
+        clocked = defaultdict(list)
+        for kind, locidx, item in self._flatten():
+            if isinstance(item, VarDecl) and item.clock is not None:
+                clocked[item.clock].append((locidx, item))
+            yield kind, locidx, item
+        for k, v in clocked.items():
+            yield ModItem.CLK, k, v
 
 
 #
@@ -816,9 +1234,9 @@ def _int(tok, min=None, max=None, message="invalid int litteral"):
     try:
         val = int(tok.value)
         if min is not None:
-            _assert(val >= min, tok.line, tok.column, message)
+            assert val >= min or _error(tok.line, tok.column, message)
         if max is not None:
-            _assert(val <= max, tok.line, tok.column, message)
+            assert val <= max or _error(tok.line, tok.column, message)
         return val
     except ParseError:
         raise
@@ -826,15 +1244,19 @@ def _int(tok, min=None, max=None, message="invalid int litteral"):
         _error(tok.line, tok.column, message)
 
 
-BOOL = {0, 1}
+BOOL = frozenset({0, 1})
 
 
 @v_args(inline=True)
-class MRRTrans(Transformer):
+class MRRTrans(Transformer):  # pyright: ignore[reportMissingTypeArgument]
+    def __init__(self, text):
+        super().__init__()
+        self.text = text
+
     def start(self, clocks, model):
         if clocks:
             model.clocks.update(clocks)
-            model.clocked = {c: [] for c in clocks}
+            model.clocked.update((c, []) for c in clocks)
         model.make()
         return model
 
@@ -846,7 +1268,7 @@ class MRRTrans(Transformer):
             if line is not None:
                 break
         return Location(
-            line, variables or (), constraints or (), rules or (), locations
+            line or 0, variables or (), constraints or (), rules or (), tuple(locations)
         )
 
     def pattern(self, *rules):
@@ -862,10 +1284,10 @@ class MRRTrans(Transformer):
         return d
 
     def location(self, name, size, model):
-        model.name = name.value
-        model.line = name.line
+        object.__setattr__(model, "name", name.value)
+        object.__setattr__(model, "line", name.line)
         if size is not None:
-            model.size = _int(size, 1, None, "invalid array size")
+            object.__setattr__(model, "size", _int(size, 1, None, "invalid array size"))
         return model
 
     def clockdecl(self, name, desc):
@@ -877,24 +1299,23 @@ class MRRTrans(Transformer):
             clock, typ = typ
         else:
             clock = None
-        if isinstance(init, Tuple):
-            init = [i & typ for i in init]
+        if isinstance(init, tuple):
+            init = tuple(i & typ for i in init)
         elif init is None:
             if not clock:
                 init = typ
         else:
             init = init & typ
         if size is None:
-            _assert(
-                not isinstance(init, Tuple),
+            assert not isinstance(init, tuple) or _error(
                 name.line,
                 None,
                 "cannot initialise scalar with array",
             )
         else:
-            if not isinstance(init, Tuple):
-                init = [init] * size
-            elif init.shape != typ.size:
+            if not isinstance(init, tuple):
+                init = (init,) * size
+            elif len(init) != typ.size:
                 _error(name.line, None, "type/init size mismatch")
         return VarDecl(
             name.line,
@@ -917,7 +1338,7 @@ class MRRTrans(Transformer):
         else:
             _error(name.line, None, f"unexpected initial value {sign.value!r}")
         return VarDecl(
-            name.line, name.value, BOOL, None, init, desc.value.strip(), True
+            name.line, name.value, BOOL, None, frozenset(init), desc.value.strip(), True
         )
 
     def type(self, dom, size):
@@ -956,31 +1377,43 @@ class MRRTrans(Transformer):
             tags = tuple(ts for t in tags.value.split(",") if (ts := t.strip()))
         else:
             line = args[0].line
-        left, right, quanti = [], [], {}
+        left, right, quanti = [], [], None
         for arg in args:
             if isinstance(arg, BinOp):
                 left.append(arg)
             elif isinstance(arg, Assignment):
                 right.append(arg)
-            elif isinstance(arg, dict):
-                quanti.update(arg)
+            elif isinstance(arg, Quanti):
+                quanti = arg
             else:
-                _assert(
-                    arg is None or isinstance(arg, str),
-                    line,
-                    None,
-                    f"invalid condition or assignment {arg}",
+                assert (
+                    arg is None
+                    or isinstance(arg, str)
+                    or _error(
+                        line,
+                        None,
+                        f"invalid condition or assignment {arg}",
+                    )
                 )
-        return Action(line, left, right, tags or (), quantifier=quanti)
+        return Action(line, tuple(left), tuple(right), tags or (), quantifier=quanti)
 
-    def quantifier(self, op, *args):
-        quanti = {}
-        for arg in args:
-            if isinstance(arg, dict):
-                quanti.update(arg)
-            else:
-                quanti[arg.value] = op.value
-        return quanti
+    def quantifier(self, *args):
+        if isinstance(args[-1], Expr) or args[-1] is None:
+            *quant, cond = args
+        else:
+            quant, cond = args, None
+        both = {"any": set(), "all": set()}
+        for q, names in quant:
+            both[q].update(names)
+        return Quanti(**{k: frozenset(v) for k, v in both.items()}, cond=cond)
+
+    def quant(self, q, *names):
+        ids = set()
+        for n in names:
+            if (i := n.value) in ids:
+                _error(n.line, n.column, f"duplicated name {i!r}", ParseError)
+            ids.add(i)
+        return q.value, ids
 
     def condition_long(self, left, op, right):
         line, column = left.line, left.column
@@ -1025,19 +1458,25 @@ class MRRTrans(Transformer):
     def at_inner(self, name, index):
         return "inner", name.value, index
 
-    def at_outer(self, at):
+    def at_outer(self, _):
         return "outer"
 
-    def index(self, idx, op=None, inc=None):
-        if op is not None and inc is not None:
-            return idx.value, op.value, int(inc.value)
-        else:
-            try:
-                idx = idx.value
-                idx = int(idx)
-            except ValueError:
-                pass
-            return idx
+    def intexpr(self, *atoms):
+        return self.expr(int, *atoms)
+
+    def boolexpr(self, *atoms):
+        return self.expr(bool, *atoms)
+
+    def expr(self, cast, *atoms):
+        src = self.text[atoms[0].start_pos : atoms[-1].end_pos]
+        try:
+            x = Expr(src)
+            if x.const:
+                return cast(x())
+            else:
+                return x
+        except Exception as err:
+            _error(atoms[0].line, atoms[0].column + 1, str(err))
 
     def assignment_long(self, target, assign, value):
         if isinstance(value, Token):
@@ -1075,12 +1514,12 @@ class MRRTrans(Transformer):
 
 
 class MRRIndenter(Indenter):
-    NL_type = "_NL"
-    OPEN_PAREN_types = []
-    CLOSE_PAREN_types = []
-    INDENT_type = "_INDENT"
-    DEDENT_type = "_DEDENT"
-    tab_len = 4
+    NL_type = "_NL"  # pyright: ignore[reportAssignmentType,reportIncompatibleMethodOverride]
+    OPEN_PAREN_types = []  # pyright: ignore[reportAssignmentType,reportIncompatibleMethodOverride]
+    CLOSE_PAREN_types = []  # pyright: ignore[reportAssignmentType,reportIncompatibleMethodOverride]
+    INDENT_type = "_INDENT"  # pyright: ignore[reportAssignmentType,reportIncompatibleMethodOverride]
+    DEDENT_type = "_DEDENT"  # pyright: ignore[reportAssignmentType,reportIncompatibleMethodOverride]
+    tab_len = 4  # pyright: ignore[reportAssignmentType,reportIncompatibleMethodOverride]
 
 
 def parse_src(src, *defs, pattern=False):
@@ -1092,11 +1531,12 @@ def parse_src(src, *defs, pattern=False):
         except Exception:
             vardef[d] = None
     if pattern:
-        LS = Lark_StandAlone_Pattern
+        lsa = Lark_StandAlone_Pattern
     else:
-        LS = Lark_StandAlone
-    parser = LS(transformer=MRRTrans(), postlex=MRRIndenter())
-    return parser.parse(cpp(src, **vardef))
+        lsa = Lark_StandAlone
+    _src = cpp(src, **vardef)
+    parser = lsa(transformer=MRRTrans(_src), postlex=MRRIndenter())
+    return parser.parse(_src)
 
 
 def parse(path, *defs, pattern=False):

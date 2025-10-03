@@ -547,7 +547,7 @@ class Tree(Generic[_Leaf_T]):
         return self.data
 
     def _pretty(self, level, indent_str):
-        yield f"{indent_str*level}{self._pretty_label()}"
+        yield f"{indent_str * level}{self._pretty_label()}"
         if len(self.children) == 1 and not isinstance(self.children[0], Tree):
             yield f"\t{self.children[0]}\n"
         else:
@@ -556,7 +556,7 @@ class Tree(Generic[_Leaf_T]):
                 if isinstance(n, Tree):
                     yield from n._pretty(level + 1, indent_str)
                 else:
-                    yield f"{indent_str*(level+1)}{n}\n"
+                    yield f"{indent_str * (level + 1)}{n}\n"
 
     def pretty(self, indent_str: str = "  ") -> str:
         # --
@@ -3038,9 +3038,9 @@ class ParsingFrontend(Serialize):
             self.parser = parser
         else:
             create_parser = _parser_creators.get(parser_conf.parser_type)
-            assert (
-                create_parser is not None
-            ), "{} is not supported in standalone mode".format(parser_conf.parser_type)
+            assert create_parser is not None, (
+                "{} is not supported in standalone mode".format(parser_conf.parser_type)
+            )
             self.parser = create_parser(lexer_conf, parser_conf, options)
 
         ##
