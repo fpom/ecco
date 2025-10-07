@@ -62,4 +62,11 @@ reportUnknownMemberType = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnknownArgumentType = "none"
 reportUnknownParameterType = "none"
+reportUnusedCallResult = "none"
 reportAny = "none"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+addopts = "--isolate"

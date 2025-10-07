@@ -1,0 +1,29 @@
+#ifndef NUM
+#define NUM 2
+#endif
+#ifndef POP
+#define POP 5
+#endif
+#ifndef MAX
+#define MAX 3
+#endif
+
+clocks:
+    tick: unique clock
+
+variables:
+    {0..POP}[NUM] out = 0: how many animals are outside
+
+location nest[NUM]:
+    variables:
+        {0..POP} in = POP: how many animals are currently in this nest
+        {tick: 0..MAX} time = *: how long the nest has been empty
+    rules:
+        # one animal, that is not the last in the nest, leaves it
+        in>1 >> in--, out[self]@@++
+        # last animal leaves the nest
+        in==1 >> in=0, out[self]@@++, time=0
+
+rules:
+    # an animal that is out can go back to the nest it came from
+    out[i]>0 >> out[i]--, in@nest[i]++, time@nest[i]* for any i

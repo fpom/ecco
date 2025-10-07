@@ -1,0 +1,29 @@
+# this is a comment
+variables:
+    Rp+: reproductives
+    Wk-: workers
+    Sd-: soldiers
+    Te-: termitomyces
+    Ec-: egg chambers
+    Fg-: fungal gardens
+    Md-: mound
+    Wd-: wood
+    Ai-: air of the nest
+    Ac*: ant competitors
+
+constraints:
+    Fg- >> Te-
+
+rules:
+    Wk+, Te+ >> Wd-, Ai-
+    Wk+ >> Wd+, Te+, Fg+, Ec+, Md+
+    Wd- >> Wk-, Te-
+    Rp+ >> Ec+
+    Rp+, Ec+ >> Wk+
+    Wk+, Wd+ >> Sd+, Rp+
+    Md+ >> Ai+
+    Wk- >> Fg-, Sd-
+    Wk-, Rp- >> Ec-
+    Sd+ >> Ac-
+    Ac+, Sd- >> Wk-, Rp-
+    Ai- >> Rp-, Wk-, Te-

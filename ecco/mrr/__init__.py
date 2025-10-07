@@ -347,11 +347,11 @@ class Model(BaseModel):
             con_guards = []
             for locidx, act in flat[ModItem.CON]:
                 con_guards.append(self._gal_act(out, locidx, act, actions, sp.true))
-            guard = sp.And(*con_guards)
+            extraguard = sp.Not(sp.Or(*con_guards))
             for locidx, act in flat[ModItem.RUL]:
-                self._gal_act(out, locidx, act, actions, guard)
+                self._gal_act(out, locidx, act, actions, extraguard)
             for clock, vars in flat[ModItem.CLK]:
-                self._gal_clk(out, clock, vars, actions, guard)
+                self._gal_clk(out, clock, vars, actions, extraguard)
             out.write("}\n")
         return init, doms, actions
 
@@ -394,13 +394,13 @@ class Model(BaseModel):
             )
         actions.add(name)
         cond = sp.And(*(c.sympy(-1, vname) for c in act.left))
-        loop = sp.And(
+        loop = sp.Or(
             *(
-                BinOp(a.line, a.column, a.target, "==", a.value).sympy(-1, vname)
+                BinOp(a.line, a.column, a.target, "!=", a.value).sympy(-1, vname)
                 for a in act.right
             )
         )
-        guard = sp.And(cond, sp.Not(loop), extraguard)
+        guard = sp.And(cond, loop, extraguard)
         out.write(
             f"  // {'.'.join(str(p) for p in (act.loc.path @ locidx) + (act.boundname,))}\n"
         )
@@ -420,16 +420,16 @@ class Model(BaseModel):
                 out.write(f"    if ({target} < {m}) {{ abort; }}\n")
                 out.write(f"    if ({target} > {M}) {{ abort; }}\n")
         out.write("  }\n")
-        return cond
+        return guard
 
     def _gal_clk(self, out, clock, variables, actions, extraguard):
         vdecl = {self._gal_vname(locidx, decl): decl for locidx, decl in variables}
         actions.add(f"tick.{clock}")
-        skip = sp.And(*(sp.Symbol(v) == -1 for v in vdecl))
+        skip = sp.Or(*(sp.Ne(sp.Symbol(v), -1) for v in vdecl))
         cond = sp.And(
-            *(sp.Symbol(name) < max(var.domain) for name, var in vdecl.items())
+            *(sp.Lt(sp.Symbol(name), max(var.domain)) for name, var in vdecl.items())
         )
-        guard = sp.And(sp.Not(skip), cond, extraguard)
+        guard = sp.And(skip, cond, extraguard)
         out.write(f"  // tick.{clock}\n")
         out.write(f"  transition tick.{clock} [{sp.ccode(guard)}] {{\n")
         for name in vdecl:
