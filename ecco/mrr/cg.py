@@ -123,6 +123,7 @@ class ComponentGraph:
         Return: a `ComponentGraph` instance
         """
         default_init, doms, actions = model.gal()
+        model._gal2act = actions
         g2m, m2g, n2n, n2t = cls._translate_names(doms, actions)
         vmin = {v: min(d) for v, d in doms.items()}
         vmax = {v: max(d) for v, d in doms.items()}
@@ -376,13 +377,13 @@ class ComponentGraph:
 
     def _make_ec_actions(self, actions):
         "Compute the columns `actions` of table `.edges`."
-        gal = self.model.spec.gal
+        g2a = self.model._gal2act
         m2g = self.lts.m2g
         return hset(
             tag
             for act in actions
             for tag in (
-                gal[m2g[act]][:1] if act.startswith("tick.") else gal[m2g[act]].tags
+                [g2a[m2g[act]]] if act.startswith("tick.") else g2a[m2g[act]].tags
             )
         )
 

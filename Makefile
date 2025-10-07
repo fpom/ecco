@@ -1,5 +1,11 @@
 VERSION=$$(git tag|tail -n1)
 
+test:
+	pytest
+
+install:
+	CC=gcc CXX=g++ pip install --force --no-deps .
+
 lark: ecco/mrr/mrrparse.py ecco/mrr/pattparse.py
 
 ecco/mrr/mrrparse.py: ecco/mrr/mrr.lark

@@ -335,7 +335,7 @@ class Model(BaseModel):
          - `doms` is a `dict` that maps every variable to its domain
          - `actions` is the `set` of action names
         """
-        init, doms, actions = {}, {}, set()
+        init, doms, actions = {}, {}, {}
         flat = {k: [] for k in ModItem}
         name = re.sub("[^a-z0-9]+", "", self.base.name, flags=re.I)
         with self["gal"].open("w") as out:
@@ -392,7 +392,7 @@ class Model(BaseModel):
                 for k, v in sorted(act.bound.items())
                 if k != self
             )
-        actions.add(name)
+        actions[name] = act
         cond = sp.And(*(c.sympy(-1, vname) for c in act.left))
         loop = sp.Or(
             *(
@@ -424,7 +424,7 @@ class Model(BaseModel):
 
     def _gal_clk(self, out, clock, variables, actions, extraguard):
         vdecl = {self._gal_vname(locidx, decl): decl for locidx, decl in variables}
-        actions.add(f"tick.{clock}")
+        actions[f"tick.{clock}"] = clock
         skip = sp.Or(*(sp.Ne(sp.Symbol(v), -1) for v in vdecl))
         cond = sp.And(
             *(sp.Lt(sp.Symbol(name), max(var.domain)) for name, var in vdecl.items())
