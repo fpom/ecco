@@ -42,6 +42,8 @@ class BindError(ParseError):
 # source preprocessing
 #
 
+_lno = re.compile(r'^# (\d+) "<stdin>"$')
+
 
 def cpp(text: str, **var: str | int):
     out = subprocess.run(
@@ -50,8 +52,17 @@ def cpp(text: str, **var: str | int):
         encoding="utf-8",
         capture_output=True,
     ).stdout
-    out = out.split('# 1 "<stdin>"\n')[-1]
-    return "".join((line.split("#", 1)[0]).rstrip() + "\n" for line in out.splitlines())
+    src, num = [], -1
+    for line in out.splitlines():
+        if match := _lno.match(line):
+            n = int(match.group(1)) - 1
+            if n > num >= 0:
+                src.append("\n" * (n - num))
+            num = n
+        elif num >= 0:
+            src.append(line.split("#", 1)[0].rstrip() + "\n")
+            num += 1
+    return "".join(src)
 
 
 #
@@ -611,16 +622,17 @@ class VarUse(_Element):
                     f"invalid index for {self.locname!r}[{loc.sub[self.locname].size}]",
                 )
             )
+            decl = loc.sub[self.locname].var[self.name]
             assert (
                 not isinstance(self.locidx, int)
                 or (
-                    self.decl.loc is not None
-                    and self.decl.loc.size is not None
-                    and 0 <= self.locidx < self.decl.loc.size
+                    decl.loc is not None
+                    and decl.loc.size is not None
+                    and 0 <= self.locidx < decl.loc.size
                 )
                 or self._error(f"location index '{self.locidx}' out of range")
             )
-            super().__setattr__("decl", loc.sub[self.locname].var[self.name])
+            super().__setattr__("decl", decl)
         assert (
             self.index is None
             or ((decl := self.decl) is not None and decl.size is not None)
@@ -629,13 +641,11 @@ class VarUse(_Element):
         assert (
             not isinstance(self.index, int)
             or (
-                self.decl is not None
-                and (decl := self.decl) is not None
+                (decl := self.decl) is not None
                 and decl.size is not None
-                and self.index
-                and 0 <= decl.size < self.index
+                and 0 <= self.index < decl.size
             )
-            or self._error("index '{self.index}' out of range")
+            or self._error(f"index '{self.index}' out of range")
         )
         assert (
             self.locidx is None
