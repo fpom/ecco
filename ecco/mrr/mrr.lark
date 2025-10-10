@@ -29,7 +29,7 @@ simple_init: INT [".." INT]                   -> init_int
     | "(" simple_init ("," simple_init)* ")"  -> sequence
     | "*"                                     -> init_all
 
-actdecl: ["[" TAGS "]"] condition ("," condition)* ">>" assignment ("," assignment)* [quantifier] _NL
+actdecl: ["[" TAGS "]"] condition ("," condition)* _THEN assignment ("," assignment)* [quantifier] _NL
 condition: (var | INT) CMP (var | INT)   -> condition_long
     | var UNOP                           -> condition_short
 assignment: var ASSIGN (var | INT | "*") -> assignment_long
@@ -44,6 +44,7 @@ quant: "for" QUANTI NAME ("," NAME)*
 intexpr: (NAME | INT | BINOP | "(" | ")")+
 boolexpr: (NAME | INT | CMP | BINOP | "and" | "or" | "not" | "(" | ")")+
 
+_THEN.1: ">>"
 QUANTI: /all|any/
 
 NAME: /[a-z][a-z0-9]*/i

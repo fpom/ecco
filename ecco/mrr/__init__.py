@@ -1,4 +1,5 @@
 import re
+import sys
 from collections import defaultdict
 from itertools import product
 from typing import cast
@@ -319,6 +320,9 @@ class Model(BaseModel):
             return cg.split(*split, **aliased)
         else:
             return cg
+
+    def expand(self, out=sys.stdout):
+        self.spec.expand().save(out)
 
     def gal(self):
         """Export the model as a GAL specification.

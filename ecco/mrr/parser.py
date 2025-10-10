@@ -1,6 +1,7 @@
 import ast
 import operator
 import re
+import sys
 import subprocess
 from collections import defaultdict
 from collections.abc import Collection, Generator, Sequence, Callable
@@ -10,7 +11,7 @@ from functools import cached_property, reduce
 from itertools import chain
 from operator import or_
 from types import SimpleNamespace
-from typing import Literal, NoReturn, Self, cast
+from typing import Literal, NoReturn, Self, cast, TextIO
 
 import sympy as sp
 import z3
@@ -202,6 +203,18 @@ class VarDecl(_Element):
     clock: str | None = None  # name of clock that tick it
     loc: "Location" = field(init=False, repr=False, hash=False, compare=False)
 
+    def copy(self) -> "VarDecl":
+        return VarDecl(
+            self.line,
+            self.name,
+            self.domain,
+            self.size,
+            self.init,
+            self.description,
+            self.isbool,
+            self.clock,
+        )
+
     def __post_init__(self):
         assert self.size is None or self.size > 0 or self._error("invalid size")
         super().__setattr__("domain", frozenset(self.domain))
@@ -267,14 +280,28 @@ class VarDecl(_Element):
         super(VarDecl, new).__setattr__("loc", self.loc)
         return new
 
-    def __str__(self):
-        if self.size is None:
-            idx = ""
+    def _init(self, value: None | frozenset[int]):
+        if value is None:
+            return "*"
+        elif len(value) == 1:
+            return f"{next(iter(value))}"
+        elif frozenset(range((m := min(value)), (M := max(value)) + 1)):
+            return f"{m}..{M}"
         else:
-            idx = f"[{self.size}]"
+            return "|".join(str(i) for i in value)
+
+    def __str__(self):
+        idx = "" if self.size is None else f"[{self.size}]"
+        clk = "" if self.clock is None else f"{self.clock}: "
+        if self.init is None or isinstance(self.init, frozenset):
+            init = self._init(self.init)
+        elif (_init := self.init[0]) and all(i == _init for i in self.init[1:]):
+            init = self._init(_init)
+        else:
+            init = str(tuple(set(i) for i in self.init))
         return (
-            f"{{{min(self.domain)}..{max(self.domain)}}}{idx} {self.name}"
-            f" = {self.init}: {self.description}"
+            f"{{{clk}{min(self.domain)}..{max(self.domain)}}}{idx} {self.name}"
+            f" = {init}: {self.description}"
         )
 
     def __html__(self, h):
@@ -660,7 +687,9 @@ class VarUse(_Element):
         return (
             frozenset([(self.locidx, cast(int, self.decl.loc.size))])
             if isinstance(self.locidx, Expr)
-            else frozenset() | frozenset([(self.index, cast(int, self.decl.size))])
+            else frozenset()
+        ) | (
+            frozenset([(self.index, cast(int, self.decl.size))])
             if isinstance(self.index, Expr)
             else frozenset()
         )
@@ -789,10 +818,8 @@ class BinOp(_Element):
 
     @cached_property
     def indexes(self) -> frozenset[tuple[Expr, int]]:
-        return (
-            self.left.indexes
-            if isinstance(self.left, VarUse)
-            else frozenset() | self.right.indexes
+        return (self.left.indexes if isinstance(self.left, VarUse) else frozenset()) | (
+            self.right.indexes
             if isinstance(self.right, (VarUse, BinOp))
             else frozenset()
         )
@@ -826,7 +853,10 @@ class Assignment(_Element):
         )
 
     def __str__(self):
-        return f"{self.target}={self.value if self.value is not None else '*'}"
+        if isinstance(self.value, BinOp) and self.value.left == self.target:
+            return f"{self.target}{self.value.op}={self.value.right}"
+        else:
+            return f"{self.target}={self.value if self.value is not None else '*'}"
 
     def __html__(self, h):
         if (decl := self.target.decl) is not None and decl.isbool:
@@ -1078,9 +1108,7 @@ class Location(_Element):
     name: str | None = None  # name if nested
     size: int | None = None  # size of array
     parent: Self | None = field(init=False, repr=False, hash=False, compare=False)
-    clocks: dict[str, str] = field(
-        default_factory=dict, init=False, repr=False, hash=False, compare=False
-    )
+    clocks: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
     clocked: dict[str, list[VarDecl]] = field(
         default_factory=dict, init=False, repr=False, hash=False, compare=False
     )
@@ -1180,7 +1208,7 @@ class Location(_Element):
         for var in self.variables:
             var.make(self)
             if var.clock:
-                assert var.clock in top.clocks or self._error(
+                assert var.clock in top.clocks or var._error(
                     f"clock {var.clock} is not defined"
                 )
                 top.clocked[var.clock].append(var)
@@ -1233,6 +1261,48 @@ class Location(_Element):
             yield kind, locidx, item
         for k, v in clocked.items():
             yield ModItem.CLK, k, v
+
+    def _expand(self) -> "Location":
+        new = Location(
+            self.line,
+            tuple(v.copy() for v in self.variables),
+            tuple(x for a in self.constraints for x in a.expand(None)),
+            tuple(x for a in self.rules for x in a.expand(None)),
+            tuple(loc._expand() for loc in self.locations),
+            self.name,
+            self.size,
+        )
+        new.clocks.update(self.clocks)
+        new.clocked.update((c, []) for c in self.clocks)
+        return new
+
+    def expand(self) -> "Location":
+        new = self._expand()
+        new.make()
+        return new
+
+    def save(self, out: str | TextIO = sys.stdout, indent: str = ""):
+        if isinstance(out, str):
+            out = open(out, "w")
+        if self.clocks:
+            out.write("clocks:\n")
+            for clk, txt in self.clocks.items():
+                out.write(f"    {clk}: {txt}\n")
+        if self.variables:
+            out.write(f"{indent}variables:\n")
+            for var in self.variables:
+                out.write(f"{indent}    {var}\n")
+        if self.locations:
+            for loc in self.locations:
+                idx = "" if loc.size is None else f"[{loc.size}]"
+                out.write(f"{indent}location {loc.name}{idx}:\n")
+                loc.save(out, indent + "    ")
+        for name in ("constraints", "rules"):
+            attr = getattr(self, name)
+            if attr:
+                out.write(f"{indent}{name}:\n")
+                for act in attr:
+                    out.write(f"{indent}    {act}\n")
 
 
 #
