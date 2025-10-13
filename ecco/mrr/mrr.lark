@@ -30,10 +30,10 @@ simple_init: INT [".." INT]                   -> init_int
     | "*"                                     -> init_all
 
 actdecl: ["[" TAGS "]"] condition ("," condition)* _THEN assignment ("," assignment)* [quantifier] _NL
-condition: (var | INT) CMP (var | INT)   -> condition_long
-    | var UNOP                           -> condition_short
-assignment: var ASSIGN (var | INT | "*") -> assignment_long
-    | var UNOP                           -> assignment_short
+condition: (var | INT) CMP (var | INT)    -> condition_long
+    | var UNOP                            -> condition_short
+assignment: var ASSIGN (var | INT | STAR) -> assignment_long
+    | var UNOP                            -> assignment_short
 var: NAME ["[" intexpr "]"] ["@" atloc]
 atloc: AT                      -> at_outer
     | NAME ["[" intexpr "]"]   -> at_inner
@@ -44,18 +44,19 @@ quant: "for" QUANTI NAME ("," NAME)*
 intexpr: (NAME | INT | BINOP | "(" | ")")+
 boolexpr: (NAME | INT | CMP | BINOP | "and" | "or" | "not" | "(" | ")")+
 
-_THEN.1: ">>"
 QUANTI: /all|any/
 
 NAME: /[a-z][a-z0-9]*/i
 NAT:  /[0-9]+/
 INT:  /[+-]?[0-9]+/
 
-CMP: ("==" | "<=" | "<" | ">=" | ">" | "!=")
-ASSIGN: /[+-]?=/
-UNOP:  ("++" | "--" | "+" | "-" | "*" | "~")
-BINOP:  ("+" | "-")
+_THEN.4: ">>"
+CMP.3: ("==" | "<=" | "<" | ">=" | ">" | "!=")
+ASSIGN.2: ("+=" | "-=" | "=")
+UNOP.1:  ("++" | "--" | "+" | "-" | "*" | "~")
+BINOP.1:  ("+" | "-")
 AT: "@"
+STAR: "*"
 
 TAGS: /[^\]\n\r]+/
 DESC: /[^\n\r]+/
