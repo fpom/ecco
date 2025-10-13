@@ -1,5 +1,6 @@
 import ast
 import operator
+import pathlib
 import re
 import sys
 import subprocess
@@ -434,7 +435,7 @@ class Quanti(_Element):
             raise ValueError(
                 f" {', '.join(repr(v) for v in err)} quantified both 'all' and 'any'"
             )
-        if self.cond and (miss := self.cond.names - (self.any | self.all)):
+        if self.cond and (err := self.cond.names - (self.any | self.all)):
             raise ValueError(
                 f" {', '.join(repr(v) for v in err)} used in 'if' but not quantified"
             )
@@ -572,11 +573,8 @@ class VarUse(_Element):
             super().__setattr__("locidx", self.locidx())
         super().__setattr__(
             "names",
-            self.index.names
-            if isinstance(self.index, Expr)
-            else set() | self.locidx.names
-            if isinstance(self.locidx, Expr)
-            else set(),
+            (self.index.names if isinstance(self.index, Expr) else set())
+            | (self.locidx.names if isinstance(self.locidx, Expr) else set()),
         )
 
     def __matmul__(self, other: tuple[int | None, ...]) -> tuple[str | int, ...]:
@@ -728,11 +726,8 @@ class BinOp(_Element):
     def __post_init__(self):
         super().__setattr__(
             "names",
-            self.left.names
-            if isinstance(self.left, VarUse)
-            else set() | self.right.names
-            if isinstance(self.right, (VarUse, BinOp))
-            else set(),
+            (self.left.names if isinstance(self.left, VarUse) else set())
+            | (self.right.names if isinstance(self.right, (VarUse, BinOp)) else set()),
         )
 
     _sp_op = {
@@ -847,9 +842,8 @@ class Assignment(_Element):
     def __post_init__(self):
         super().__setattr__(
             "names",
-            self.target.names | self.value.names
-            if isinstance(self.value, (VarUse, BinOp))
-            else set(),
+            self.target.names
+            | (self.value.names if isinstance(self.value, (VarUse, BinOp)) else set()),
         )
 
     def __str__(self):
@@ -900,8 +894,8 @@ class Assignment(_Element):
 
     @cached_property
     def indexes(self) -> frozenset[tuple[Expr, int]]:
-        return (
-            self.target.indexes | self.value.indexes
+        return self.target.indexes | (
+            self.value.indexes
             if isinstance(self.value, (VarUse, BinOp))
             else frozenset()
         )
@@ -934,6 +928,9 @@ class Action(_Element):
         init=False, repr=False, hash=False, compare=False
     )  # names used in indexes
     loc: "Location" = field(init=False, repr=False, hash=False, compare=False)
+    origin: Self | None = field(
+        default=None, init=False, repr=False, hash=False, compare=False
+    )
 
     def __post_init__(self):
         super().__setattr__(
@@ -1030,6 +1027,22 @@ class Action(_Element):
                 (a.target.name, a.target.locname, a.target.locidx, a.target.index)
             )
 
+    def bind(self, vv: dict[str, int]):
+        new = Action(
+            self.line,
+            tuple(left.bind(vv) for left in self.left),
+            tuple(right.bind(vv) for right in self.right),
+            self.tags,
+            None if self.quantifier is None else self.quantifier.bind(vv),
+        )
+        super(Action, new).__setattr__("name", self.name)
+        super(Action, new).__setattr__("loc", self.loc)
+        super(Action, new).__setattr__(
+            "bound", self.bound | {k: v for k, v in vv.items() if k in self.names}
+        )
+        super(Action, new).__setattr__("origin", self)
+        return new
+
     def expand(self, locidx: int | None):
         if locidx is None:
             vv = {}
@@ -1046,21 +1059,6 @@ class Action(_Element):
                     yield new._expand_all(vall)
                 else:
                     yield new
-
-    def bind(self, vv: dict[str, int]):
-        new = Action(
-            self.line,
-            tuple(left.bind(vv) for left in self.left),
-            tuple(right.bind(vv) for right in self.right),
-            self.tags,
-            None if self.quantifier is None else self.quantifier.bind(vv),
-        )
-        super(Action, new).__setattr__("name", self.name)
-        super(Action, new).__setattr__("loc", self.loc)
-        super(Action, new).__setattr__(
-            "bound", self.bound | {k: v for k, v in vv.items() if k in self.names}
-        )
-        return new
 
     def _expand_all(self, vv: dict[str, set[int]]):
         if self.quantifier is None:
@@ -1095,6 +1093,7 @@ class Action(_Element):
         super(Action, act).__setattr__(
             "bound", self.bound | cast(dict[str, int | set[int]], vv)
         )
+        super(Action, act).__setattr__("origin", self.origin or self)
         return act
 
 
@@ -1281,8 +1280,8 @@ class Location(_Element):
         new.make()
         return new
 
-    def save(self, out: str | TextIO = sys.stdout, indent: str = ""):
-        if isinstance(out, str):
+    def save(self, out: str | pathlib.Path | TextIO = sys.stdout, indent: str = ""):
+        if isinstance(out, (str, pathlib.Path)):
             out = open(out, "w")
         if self.clocks:
             out.write("clocks:\n")
@@ -1301,7 +1300,11 @@ class Location(_Element):
             attr = getattr(self, name)
             if attr:
                 out.write(f"{indent}{name}:\n")
+                org = None
                 for act in attr:
+                    if act.origin and act.origin is not org:
+                        out.write(f"{indent}    # {act.origin}\n")
+                        org = act.origin
                     out.write(f"{indent}    {act}\n")
 
 
