@@ -392,7 +392,7 @@ class Model(BaseModel):
             name += "._." + ".".join(
                 f"{k}.{v}"
                 if isinstance(v, int)
-                else f"{k}.{'_'.join(str(i) for i in sorted(v))}"
+                else f"{k}.{'.'.join(str(i) for i in sorted(v))}"
                 for k, v in sorted(act.bound.items())
                 if k != self
             )
