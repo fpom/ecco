@@ -72,6 +72,31 @@ def test_nests():
     assert len(g.lts.tpred["tick.tick"](g.lts.states)) == 39
 
 
+def test_sort():
+    m = Model.parse(tests_dir / "sort.mrr")
+    g = m()
+    assert len(g) == 1
+    #
+    assert len(g.lts.init) == 1
+    assert len(g.lts.states) == 1358625
+    assert len(g.lts.dead) == 9
+    assert len(g.lts.hull) == 0
+    assert len(g.lts.tsucc) == len(g.lts.tpred) == 45
+    #
+    tmp = []
+    for s in g.lts.dead.items():
+        for n in s.values():
+            for d in n:
+                for k, v in d.items():
+                    if k.startswith("int_tab."):
+                        assert k[-1] == str(v)
+                    else:
+                        assert k == "int_tmp"
+                        tmp.append(v)
+    assert len(tmp) == 9
+    assert set(tmp) == set(range(1, 10))
+
+
 def mktests(src):
     src, name = str(src), Path(src).stem
     m = Model.parse(tests_dir / src)

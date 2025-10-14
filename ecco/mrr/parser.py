@@ -1398,7 +1398,7 @@ class MRRTrans(Transformer):  # pyright: ignore[reportMissingTypeArgument]
         else:
             if not isinstance(init, tuple):
                 init = (init,) * size
-            elif len(init) != typ.size:
+            elif len(init) != size:
                 _error(name.line, None, "type/init size mismatch")
         return VarDecl(
             name.line,
