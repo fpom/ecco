@@ -3,6 +3,7 @@ __pycache__
 snapshot.py
 .*.swp
 /ecco/_ui.c
+/ecco/**/*.cpp
 /build
 /.python-version
 .ipynb_checkpoints

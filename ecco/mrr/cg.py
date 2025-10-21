@@ -92,6 +92,7 @@ class ComponentGraph:
         self._traps()
 
     def _traps(self):
+        # TODO: add an option to skip this completely
         for node in self:
             vertex = self.g.vs[self._g[node.num]]
             traps = vertex["traps"] = {}
