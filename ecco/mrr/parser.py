@@ -692,6 +692,16 @@ class VarUse(_Element):
             else frozenset()
         )
 
+    def vars(self, path: list[str]):
+        if self.locrel is None:
+            yield path, self
+        elif self.locrel == "outer":
+            yield path[:-1], self
+        elif self.locidx is None:
+            yield path + [self.locname], self
+        else:
+            yield path + [f"{self.locname}[]"], self
+
     def bind(self, vv):
         new = VarUse(
             self.line,
@@ -819,6 +829,12 @@ class BinOp(_Element):
             else frozenset()
         )
 
+    def vars(self, path: list[str]):
+        if isinstance(self.left, VarUse):
+            yield from self.left.vars(path)
+        if isinstance(self.right, (VarUse, BinOp)):
+            yield from self.right.vars(path)
+
     def bind(self, vv):
         return BinOp(
             self.line,
@@ -899,6 +915,11 @@ class Assignment(_Element):
             if isinstance(self.value, (VarUse, BinOp))
             else frozenset()
         )
+
+    def vars(self, path: list[str]):
+        yield from self.target.vars(path)
+        if isinstance(self.value, (VarUse, BinOp)):
+            yield from self.value.vars(path)
 
     def bind(self, vals):
         return Assignment(
@@ -1194,6 +1215,13 @@ class Location(_Element):
                     with h("span", style="color:#888;", BREAK=True):
                         h.write(f"  # {sec[0].upper()}{num}")
                     num += 1
+
+    def __iter__(self):
+        yield [], self
+        for loc in self.locations:
+            head = loc.name if loc.size is None else f"{loc.name}[]"
+            for path, sub in loc:
+                yield [head] + path, sub
 
     @property
     def actions(self):

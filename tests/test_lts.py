@@ -81,7 +81,12 @@ def test_sort():
     assert len(g.lts.states) == 1358625
     assert len(g.lts.dead) == 9
     assert len(g.lts.hull) == 0
-    assert len(g.lts.tsucc) == len(g.lts.tpred) == 45
+    assert (
+        (10 * 9) // 2
+        == len(g.lts.tsucc)
+        == len(g.lts.tpred)
+        == len(set((i, j) for i in range(10) for j in range(10) if i < j))
+    )
     #
     tmp = []
     for s in g.lts.dead.items():

@@ -128,7 +128,7 @@ class Model(BaseModel):
                 )
                 if var.init is None:
                     vinit = -1
-                elif isinstance(var.init, set):
+                elif isinstance(var.init, (set, frozenset)):
                     vinit = sum(var.init) / len(var.init)
                 else:
                     vinit = sum(
