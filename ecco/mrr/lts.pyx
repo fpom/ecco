@@ -187,7 +187,7 @@ cdef class LTS:
            if empty (default), they are taken from the GAL 
          - `dict[str, int] vmin`: minimum value for each variable (default: `0`)
          - `dict[str, int] vmax`: maximum value for each variable (default: `1`)
-         - `str cache`: path to saved states or `""` if none exists
+         - `str cache`: path to saved states or `""` if none exists (default: `""`)
 
         The set of reachable states is constructed (of no cache is provided),
         so instantiating an LTS may take a long time and consume a lot of memory.

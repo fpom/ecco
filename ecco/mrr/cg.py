@@ -90,8 +90,21 @@ class ComponentGraph:
         self.components = tuple(sorted(comps, key=attrgetter("num")))
         self._c = {c.num: c for c in comps}  # Component.num => Component
         self._g = {}  # Component.num => Vertex index in .g.vs
+        if model.opts.get("traps", False):
+            self.traps()
 
     def traps(self):
+        """Compute traps.
+
+        An edge entering a node is trapped if it does not allow to reach every exits
+        of this node. Thus, the component graphs shows paths that are not always feasible.
+        Hence the trap. When traps are computed, a column `trap` is added to the `.edges`
+        table showing whether each edge is trapped or not.
+
+        A node is trapped if it has trapped entering edges. Whe, traps are computed,
+        a column `traps` is added to the `.nodes` table showing the components from
+        which a trapped arc is incoming.
+        """
         for node in self:
             vertex = self.g.vs[self._g[node.num]]
             traps = vertex["traps"] = {}
@@ -109,6 +122,7 @@ class ComponentGraph:
                     edge["trap"] = True
 
     def has_traps(self):
+        """Tells whether traps have been computed or not."""
         return "traps" in self.g.vs[self._g[self.components[0].num]].attributes()
 
     @classmethod

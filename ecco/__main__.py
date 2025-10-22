@@ -1,3 +1,4 @@
+import ast
 import argparse
 import os
 import resource
@@ -5,9 +6,17 @@ import psutil
 
 from . import load
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(prog="ecco")
 parser.add_argument(
     "-d", "--debug", action="store_true", default=False, help="run in debug mode"
+)
+parser.add_argument(
+    "-o",
+    "--option",
+    action="append",
+    default=[],
+    help="add langage-dependent option ('no-OPT' can be used for 'OPT=False')",
+    metavar="OPT[=VALUE]",
 )
 parser.add_argument(
     "model", metavar="PATH", type=str, nargs="?", default=None, help="model to load"
@@ -17,8 +26,22 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+opts = {}
+for oneopt in args.option:
+    if oneopt.startswith("no-"):
+        opts[oneopt[3:]] = False
+    elif "=" not in oneopt:
+        opts[oneopt] = True
+    else:
+        name, value = oneopt.split("=", 1)
+        try:
+            value = ast.literal_eval(value)
+        except Exception:
+            pass
+        opts[name] = value
+
 if args.model:
-    _module, model = load(args.model, *args.extra)
+    _module, model = load(args.model, *args.extra, **opts)
     _globals = globals()
     _extra = getattr(_module, "__extra__", [])
     if isinstance(_extra, dict):

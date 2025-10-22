@@ -139,10 +139,18 @@ class BaseModel(object):
      - `path`: file path from which the model was loaded
      - `spec`: the model itself
      - `base`: base directory in which auxiliary files are stored
+     - `opts`: syntax-dependent options
     """
 
-    def __init__(self, path, spec, base=None):
+    __opts__: dict[str, object] = {}
+
+    def __init__(self, path, spec, base=None, opts={}):
         self.path = pathlib.Path(path)
+        _opts = getattr(self.__class__, "__opts__", {})
+        for k, v in opts.items():
+            if k not in _opts:
+                raise TypeError(f"unexpected option {k}={v!r}")
+        self.opts = _opts | opts
         self.spec = spec
         if base is None:
             base = self.path.with_suffix("")
@@ -172,14 +180,14 @@ class BaseModel(object):
             return self.base.joinpath(self.base.name).with_suffix(ext)
 
 
-def load(path, *extra):
+def load(path, *extra, **opts):
     fmt = path.rsplit(".", 1)[-1].lower()
     try:
         module = importlib.import_module("." + fmt, "ecco")
     except ModuleNotFoundError:
         raise ValueError("unknown model format %r" % fmt)
     cls = getattr(module, "Model", BaseModel)
-    return module, cls.parse(path, *extra)
+    return module, cls.parse(path, *extra, **opts)
 
 
 class hset(object):

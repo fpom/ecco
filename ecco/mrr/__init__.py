@@ -17,13 +17,20 @@ from .parser import Action, BinOp, Location, ModItem, VarDecl, VarUse, parse, pa
 
 
 class Model(BaseModel):
-    @classmethod
-    def parse(cls, path, *extra):
-        return cls(path, parse(path, *extra))
+    """
+    Options:
+    - `traps: bool = False`: whether traps should be computed automatically or not
+    """
+
+    __opts__ = {"traps": False}
 
     @classmethod
-    def parse_src(cls, path, source, *extra):
-        return cls(path, parse_src(source, *extra))
+    def parse(cls, path, *extra, **opts):
+        return cls(path, parse(path, *extra), opts=opts)
+
+    @classmethod
+    def parse_src(cls, path, source, *extra, **opts):
+        return cls(path, parse_src(source, *extra), opts=opts)
 
     @property
     def mrr(self):
