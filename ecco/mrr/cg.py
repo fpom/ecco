@@ -1,5 +1,6 @@
 import hashlib
 import re
+import time
 
 from collections import defaultdict
 from functools import partial, reduce
@@ -11,6 +12,14 @@ import pandas as pd
 import sympy
 
 from IPython.display import display
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+    TimeElapsedColumn,
+)
 
 from .. import cached_property, hset
 from ..ui import log
@@ -878,7 +887,7 @@ class ComponentGraph:
                 break
         return g
 
-    def _split(self, props, comps, rem, add, warn):
+    def _split(self, props, comps, rem, add, warn, progress=False):
         """Split `comps` yielding the size of the result at each split.
 
         Auxiliary method for `split()` allowing to stop splitting at a given
@@ -886,33 +895,53 @@ class ComponentGraph:
         """
         size = len(self)  # size of the resulting ComponentGraph
         comps = set(comps)
-        for prop, alias in props:
-            if isinstance(prop, str):
-                checker = ModelChecker(self, prop)
-                for c in comps:
-                    intr, diff = c.split_prop(prop, checker(c.states), alias)
-                    if intr is not None and diff is not None:
-                        rem.add(c)
-                        add.add(intr)
-                        add.add(diff)
-                        size += 1
-                        yield size
-                if warn and not self.lts.props[prop]:
-                    log.warn(f"property {alias or prop!r} is empty")
-            elif isinstance(prop, topo):
-                for c in comps:
-                    for p in c.split_topo(prop):
-                        if p != c:  # split_topo yields c if not split occurs
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TextColumn("[dim]+"),
+            TimeRemainingColumn(),
+            TextColumn("{task.fields[prop]}"),
+            disable=not progress,
+        ) as pbar:
+            task = pbar.add_task("splitting", total=len(props), prop="...")
+            for prop, alias in props:
+                if progress:
+                    pbar.update(task, refresh=True, prop=f"[dim]{alias or prop}")
+                    # let kernel do the refresh before we enter libddd
+                    time.sleep(0.01)
+                if isinstance(prop, str):
+                    checker = ModelChecker(self, prop)
+                    for c in comps:
+                        intr, diff = c.split_prop(prop, checker(c.states), alias)
+                        if intr is not None and diff is not None:
                             rem.add(c)
-                            add.add(p)
-                            yield size  # count after because 1st yield will
-                            size += 1  # correspond to rem.add(c)
-            else:
-                raise TypeError(f"unexpected property {prop!r}")
-            add.difference_update(rem)
-            comps = (comps - rem) | add
+                            add.add(intr)
+                            add.add(diff)
+                            size += 1
+                            yield size
+                    if warn and not self.lts.props[prop]:
+                        log.warn(f"property {alias or prop!r} is empty")
+                elif isinstance(prop, topo):
+                    for c in comps:
+                        for p in c.split_topo(prop):
+                            if p != c:  # split_topo yields c if not split occurs
+                                rem.add(c)
+                                add.add(p)
+                                yield size  # count after because 1st yield will
+                                size += 1  # correspond to rem.add(c)
+                else:
+                    raise TypeError(f"unexpected property {prop!r}")
+                add.difference_update(rem)
+                comps = (comps - rem) | add
+                if progress:
+                    pbar.update(task, advance=1, refesh=True)
+            if progress:
+                pbar.update(task, completed=len(props), refresh=True)
+                pbar.stop()
 
-    def split(self, *args, _warn=True, _limit=256, **aliased):
+    def split(self, *args, _warn=True, _limit=256, _progress=False, **aliased):
         """Split components with respect to properties.
 
         For each given property, the given components are split into the part
@@ -930,6 +959,7 @@ class ComponentGraph:
            is found to match no states
          - `_limit (int=256)`: ask a confirmation if splitting yields more that
            the given number of components, giving `0` disables confirmation
+         - `_progress (bool=False)`: show a progress bar as splits are going on
          - `alias=prop, ...`: specify aliased properties that are stored as
            `alias` instead of `prop` in the components and the nodes table
 
@@ -940,7 +970,7 @@ class ComponentGraph:
         props, comps = self._get_args(args, aliased, min_props=1, topo_props=True)
         limit = _limit
         rem, add = set(), set()
-        for size in self._split(props, comps, rem, add, _warn):
+        for size in self._split(props, comps, rem, add, _warn, _progress):
             if limit and size > limit:
                 answer = input(
                     f"We have created a graph with {size} nodes,"
@@ -1096,6 +1126,7 @@ class ComponentGraph:
         _split=True,
         _warn=True,
         _limit=256,
+        _progress=False,
         **stages,
     ):
         """Search for sequences of properties.
@@ -1117,6 +1148,7 @@ class ComponentGraph:
          - `bool _warn=True`: wheter to issue a warning if a property is found
            to match no states or if all the components are to be pruned
          - `int _limit=256`: as for `split()`
+         - `bool _progress=False`: as for `split()`
          - `classname=prop, classname=prop, ...`: at least two named properties
            to be used for the classification. Their order is the order in which
            reachability will be checked
@@ -1131,7 +1163,9 @@ class ComponentGraph:
             raise TypeError(f"expected at least two properties, but got {len(stages)}")
         # first: check searched properties
         if _split:
-            cg = self.split(*comps, _warn=_warn, **stages)
+            cg = self.split(
+                *comps, _warn=_warn, _limit=_limit, _progress=_progress, **stages
+            )
         else:
             self.check(*comps, _warn=_warn, **stages)
             cg = self
@@ -1149,7 +1183,13 @@ class ComponentGraph:
                 tgt_form = f"EF({stages[nxt]})"
                 alias = f"reach_{nxt}"
                 if _split:
-                    cg = cg.split(*src, _warn=_warn, _limit=_limit, **{alias: tgt_form})
+                    cg = cg.split(
+                        *src,
+                        _warn=_warn,
+                        _limit=_limit,
+                        _progress=_progress,
+                        **{alias: tgt_form},
+                    )
                 else:
                     cg.check(*src, _warn=_warn, **{alias: tgt_form})
         # which component validates property + reachability -> new column
