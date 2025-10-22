@@ -10,7 +10,7 @@ from colour import Color
 
 class Model(MRRModel):
     @classmethod
-    def parse(cls, path, *defs):
+    def parse(cls, path, *defs, **opts):
         sec = re.compile(r"^\s*([a-z0-9_]+)\s*:\s*(#.*)?$", re.I)
         ind = re.compile(r"^(\s*)")
         source = []
@@ -34,7 +34,7 @@ class Model(MRRModel):
                 source.append(line)
                 if match := ind.match(line):
                     indent = match.group(0)
-        return super().parse_src(path, "\n".join(source), *defs)
+        return super().parse_src(path, "\n".join(source), *defs, **opts)
 
     @property
     def rr(self):
