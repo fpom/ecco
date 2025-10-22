@@ -907,8 +907,9 @@ class ComponentGraph:
         ) as pbar:
             task = pbar.add_task("splitting", total=len(props), prop="...")
             for prop, alias in props:
+                pname = alias or (prop.name if isinstance(prop, topo) else prop)
                 if progress:
-                    pbar.update(task, refresh=True, prop=f"[dim]{alias or prop}")
+                    pbar.update(task, refresh=True, prop=f"[dim]{pname}")
                     # let kernel do the refresh before we enter libddd
                     time.sleep(0.01)
                 if isinstance(prop, str):
