@@ -6,6 +6,9 @@ test:
 install:
 	CC=gcc CXX=g++ pip install --force --no-deps .
 
+cython:
+	python setup.py build_ext --inplace
+
 lark: ecco/mrr/mrrparse.py ecco/mrr/pattparse.py
 
 ecco/mrr/mrrparse.py: ecco/mrr/mrr.lark

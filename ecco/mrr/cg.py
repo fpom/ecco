@@ -89,10 +89,8 @@ class ComponentGraph:
         self.components = tuple(sorted(comps, key=attrgetter("num")))
         self._c = {c.num: c for c in comps}  # Component.num => Component
         self._g = {}  # Component.num => Vertex index in .g.vs
-        self._traps()
 
-    def _traps(self):
-        # TODO: add an option to skip this completely
+    def traps(self):
         for node in self:
             vertex = self.g.vs[self._g[node.num]]
             traps = vertex["traps"] = {}
@@ -108,6 +106,9 @@ class ComponentGraph:
                 else:
                     traps[pred.num] = reach
                     edge["trap"] = True
+
+    def has_traps(self):
+        return "traps" in self.g.vs[self._g[self.components[0].num]].attributes()
 
     @classmethod
     def from_model(cls, model, init=None):
@@ -327,7 +328,7 @@ class ComponentGraph:
 
     def _make_nc_traps(self, row):
         "Compute the content of column 'traps'"
-        return hset(sorted(row["traps"]))
+        return hset(sorted(row.get("traps", None) or ()))
 
     def _make_ncols_setrel(self, row, rel):
         "Compute the content of column `rel`, depending on the value of `rel`."
@@ -372,7 +373,12 @@ class ComponentGraph:
            that satisfy `p` in the whole LTS
         """
         nodes = self.g.get_vertex_dataframe().set_index("node")
-        self._make_ncols(nodes, "size", "consts", "traps", *(r.name for r in setrel))
+        if self.has_traps():
+            self._make_ncols(
+                nodes, "size", "consts", "traps", *(r.name for r in setrel)
+            )
+        else:
+            self._make_ncols(nodes, "size", "consts", *(r.name for r in setrel))
         nodes.sort_index(inplace=True)
         return nodes
 
@@ -824,6 +830,8 @@ class ComponentGraph:
         A new `ComponentGraph` (or the original one if no split occurred).
         """
         _, comps = self._get_args(args, max_props=0)
+        if not self.has_traps():
+            self.traps()
         g = self
         new = set()
         while True:
@@ -1182,8 +1190,9 @@ class ComponentGraph:
             nodes_fill_palette=("red-green/white", "abs"),
             nodes_label_str=self._nodes_label_str,
             edges_label="actions",
-            edges_draw_style="trap",
         )
+        if self.has_traps():
+            options["edges_draw_style"] = "trap"
         options.update(opt)
         return Graph(self.nodes, self.edges, **options)
 
