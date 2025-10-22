@@ -1,9 +1,10 @@
+import hashlib
 import re
 
 from collections import defaultdict
 from functools import partial, reduce
 from operator import attrgetter, or_
-from typing import Self, override
+from pathlib import Path
 
 import igraph as ig
 import pandas as pd
@@ -135,7 +136,12 @@ class ComponentGraph:
             init = default_init | cls._parse_state(init, m2g)
         else:
             init = default_init | init
-        lts = LTS(str(model["gal"]), init, vmin, vmax)
+        h = hashlib.file_digest(open(model["gal"], "rb"), "sha256").hexdigest()
+        p = model.base / Path(h).with_suffix(".ddd")
+        c = str(p) if p.is_file() else ""
+        lts = LTS(str(model["gal"]), init, vmin, vmax, c)
+        if not c:
+            lts.save(str(p))
         lts.g2m, lts.m2g, lts.n2n, lts.n2t = g2m, m2g, n2n, n2t
         return cls(model, lts, Component(lts, lts.states))
 

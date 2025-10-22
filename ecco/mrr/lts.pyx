@@ -44,6 +44,7 @@ from its cimport model
 from ddd import ddd_save, ddd_load
 
 import sympy
+import hashlib
 
 
 cdef extern from "dddwrap.h":
@@ -167,7 +168,7 @@ cdef class LTS:
     ## init
     ##
 
-    def __cinit__(self, str path, dict init=None, dict vmin={}, dict vmax={}):
+    def __cinit__(self, str path, dict init=None, dict vmin={}, dict vmax={}, str cache=""):
         self.path = path
         self.tsucc = {}
         self.tpred = {}
@@ -177,7 +178,7 @@ cdef class LTS:
         self.alias = {}
         self.saila = {}
 
-    def __init__(self, str path, dict init=None, dict vmin={}, dict vmax={}):
+    def __init__(self, str path, dict init=None, dict vmin={}, dict vmax={}, str cache=""):
         """Create a new LTS from GAL file `path`.
 
         Arguments:
@@ -186,9 +187,10 @@ cdef class LTS:
            if empty (default), they are taken from the GAL 
          - `dict[str, int] vmin`: minimum value for each variable (default: `0`)
          - `dict[str, int] vmax`: maximum value for each variable (default: `1`)
+         - `str cache`: path to saved states or `""` if none exists
 
-        The set of reachable states is constructed, so instantiating an LTS
-        may take a long time and consume a lot of memory.
+        The set of reachable states is constructed (of no cache is provided),
+        so instantiating an LTS may take a long time and consume a lot of memory.
         """
         cdef str v
         cdef set expect, got
@@ -210,11 +212,15 @@ cdef class LTS:
                 raise ValueError(f"{v} has an empty domain (vmin > vmax)")
         # build transition relations and sets of states
         self._build_succ()
+        if cache:
+            self.load(cache)
         self._build_init(init)
-        self._build_states()
+        if not cache:
+            self._build_states()
         self._build_pred()
-        self._build_dead()
-        self._build_hull()
+        if not cache:
+            self._build_dead()
+            self._build_hull()
 
     cdef void _build_succ(LTS self):
         # build the successor relations
@@ -266,6 +272,37 @@ cdef class LTS:
         # build the set of SCCs hull states + HULL property
         self.hull = self.props["HULL"] = (self.pred_o(self.states)
                                           & self.succ_o(self.states))
+
+    ##
+    ## dump/load states
+    ##
+
+    def save(LTS self, str path, **headers):
+        headers["__path__"] = self.path
+        headers["__hash__"] = hashlib.file_digest(open(self.path, "rb"),
+                                                  "sha256").hexdigest()
+        cdef ddd init = s2d(self.init) if self.init else ddd.empty()
+        cdef ddd states = s2d(self.states) if self.states else ddd.empty()
+        cdef ddd dead = s2d(self.dead) if self.dead else ddd.empty()
+        cdef ddd hull = s2d(self.hull) if self.hull else ddd.empty()
+        ddd_save(path, init, states, dead, hull, **headers)
+
+    def load(LTS self, str path):
+        cdef dict headers
+        cdef list ddds
+        headers, ddds = ddd_load(path)
+        if len(ddds) != 4:
+            raise ValueError(f"invalid dump (expected 4 DDDs, found {len(ddds)})")
+        if self.path != headers.pop("__path__", None):
+            raise ValueError("not from same GAL file")
+        cdef str h = hashlib.file_digest(open(self.path, "rb"), "sha256").hexdigest()
+        if h != headers.pop("__hash__", None):
+            raise ValueError("not from same GAL model")
+        self.init = d2s(ddds[0])
+        self.states = d2s(ddds[1])
+        self.dead = d2s(ddds[2])
+        self.hull = d2s(ddds[3])
+        return headers
 
     ##
     ## build sets of states
