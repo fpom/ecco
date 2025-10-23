@@ -102,36 +102,8 @@ class ComponentGraph:
         if model.opts.get("traps", False):
             self.traps()
 
-    def traps(self):
-        """Compute traps.
-
-        An edge entering a node is trapped if it does not allow to reach every exits
-        of this node. Thus, the component graphs shows paths that are not always feasible.
-        Hence the trap. When traps are computed, a column `trap` is added to the `.edges`
-        table showing whether each edge is trapped or not.
-
-        A node is trapped if it has trapped entering edges. Whe, traps are computed,
-        a column `traps` is added to the `.nodes` table showing the components from
-        which a trapped arc is incoming.
-        """
-        for node in self:
-            vertex = self.g.vs[self._g[node.num]]
-            traps = vertex["traps"] = {}
-            exits = (
-                self.lts.pred(self.lts.succ(node.states) - node.states) & node.states
-            )
-            succ_s = self.lts.succ_s & node.states
-            for edge in vertex.in_edges():
-                pred = self[edge.source_vertex["node"]]
-                reach = succ_s(self.lts.succ(pred.states) & node.states)
-                if reach >= exits:
-                    edge["trap"] = False
-                else:
-                    traps[pred.num] = reach
-                    edge["trap"] = True
-
     def has_traps(self):
-        """Tells whether traps have been computed or not."""
+        """Tells whether (some) traps have been computed or not."""
         return "traps" in self.g.vs[self._g[self.components[0].num]].attributes()
 
     @classmethod
@@ -402,12 +374,10 @@ class ComponentGraph:
            that satisfy `p` in the whole LTS
         """
         nodes = self.g.get_vertex_dataframe().set_index("node")
+        cols = ["size", "consts"]
         if self.has_traps():
-            self._make_ncols(
-                nodes, "size", "consts", "traps", *(r.name for r in setrel)
-            )
-        else:
-            self._make_ncols(nodes, "size", "consts", *(r.name for r in setrel))
+            cols.append("traps")
+        self._make_ncols(nodes, *cols, *(r.name for r in setrel))
         nodes.sort_index(inplace=True)
         return nodes
 
@@ -839,54 +809,6 @@ class ComponentGraph:
     # splits
     #
 
-    def untrap(self, *args, _recurse=False):
-        """Remove traps from nodes.
-
-        A trap in a node `n` is defined by an input node `i` and the set `t` of
-        states that `i` allows to reach within `n`. If `t` does not include all the
-        exits of `n`, then this is a trap and this method splits `n` into `n & t` and
-        `n - t`. Doing so, new traps may be created on the new nodes, in which case
-        `untrap` should be applyied recursively until no traps remain.
-
-        # Arguments
-
-         - `int, ...`: a series of components number, if empty,
-           all the components in the graph are considered
-         - `_recurse (bool=True)`: shall untrap be applied recursively
-
-        # Return
-
-        A new `ComponentGraph` (or the original one if no split occurred).
-        """
-        _, comps = self._get_args(args, max_props=0)
-        if not self.has_traps():
-            self.traps()
-        g = self
-        new = set()
-        while True:
-            cgc = set(g.components) - set(comps)
-            for c in comps:
-                traps = g.g.vs[g._g[c.num]]["traps"]
-                parts = [c]
-                for n, t in traps.items():
-                    parts = [
-                        s
-                        for p in parts
-                        for s in p.split_prop(f"_trap_{n}_{c.num}", t, None)
-                        if s is not None
-                    ]
-                    for p in parts:
-                        p.forget(f"_trap_{n}_{c.num}")
-                cgc.update(parts)
-                new.update(parts)
-            g = self.__class__(self.model, self.lts, *cgc)
-            if not _recurse:
-                break
-            comps = [c for c in cgc & new if g.g.vs[g._g[c.num]]["traps"]]
-            if not comps:
-                break
-        return g
-
     def _split(self, props, comps, rem, add, warn, progress=False):
         """Split `comps` yielding the size of the result at each split.
 
@@ -1025,6 +947,110 @@ class ComponentGraph:
                 add.update(new)
         cg = self.__class__(self.model, self.lts, *(set(self.components) - rem | add))
         cg.n["component"] = lambda row: s2c.get(row.name, row.name)
+        return cg
+
+    def traps(self, *args: int):
+        """Compute traps.
+
+        Method `traps(...)` compute whether the edges entering the given nodes
+        (all if none given) are trapped, and thus whether the nodes themselves are.
+
+        An edge entering a node is trapped if it does not allow to reach every exit
+        of this node. In such a case, the component graphs shows paths that are not
+        always feasible. Hence the trap. When traps are computed, a column `trap` is
+        added to the `.edges` table showing whether each edge is trapped or not. A
+        node is trapped if it has trapped entering edges. When traps are computed,
+        a column `traps` is added to the `.nodes` table showing the components from
+        which a trapped arc is incoming.
+
+        # Arguments
+
+         - `int, ...`: a series of components number, if empty,
+           all the components in the graph are considered
+
+        # Return
+
+        A `dict` associating each argument component to its incoming nodes that cause
+        a trap. For instance, if `g.traps(1, 2)` returns `{1: {3, 4}, 2: {5}}`,
+        it means that `(3, 1)`, `(4, 1)`, and `(5, 2)` are trapped edges (and others
+        entering `1` or `2` are not).
+        """
+        cnums = {c.num for c in self._get_args(args, max_props=0)[1]}
+        for vertex in self.g.vs:
+            vertex["traps"] = None
+        for edge in self.g.es:
+            if (d := edge["dst"]) in cnums:
+                src, dst = self[edge["src"]], self[d]
+                vertex = self.g.vs[self._g[d]]
+                reach = self.lts.succ_s(self.lts.succ(src.states) & dst.states)
+                edge["trap"] = not all(
+                    reach & self[out["dst"]].states for out in vertex.out_edges()
+                )
+                if edge["trap"]:
+                    if vertex["traps"] is None:
+                        vertex["traps"] = {src.num}
+                    else:
+                        vertex["traps"].add(src.num)
+            else:
+                edge["trap"] = None
+        return {c: self.g.vs[self._g[c]]["traps"] for c in cnums}
+
+    def untrap(self, *args: int, _recurse: bool = False):
+        """Remove traps from nodes.
+
+        A trap in a node `n` is defined by an input node `i` and the set `t` of
+        states that `i` allows to reach through `n`. If `t` does not reach all the
+        successor nodes of `n`, then this is a trap and this method splits `n` into
+        `n & t` and `n - t`. Doing so, new traps may be created on the new nodes,
+        in which case `untrap` should be applied recursively until no traps remain.
+
+        Note that traps will be removed only from nodes on which they have been
+        detected already. So, `traps()` and `untrap()` should be called consistently.
+        (More precisely, in traps were not computed for a given node, then `untrap`
+        will ignore it.)
+
+        # Arguments
+
+         - `int, ...`: a series of components number, if empty,
+           all the components in the graph are considered
+         - `_recurse (bool=True)`: shall `untrap` be applied recursively
+
+        # Return
+
+        A new `ComponentGraph` (or the original one if no split occurred).
+        """
+        comps = {
+            c
+            for c in self._get_args(args, max_props=0)[1]
+            if self.g.vs[self._g[c.num]]["traps"]
+        }
+        cg = self
+        while comps:
+            cgc = set(cg.components) - comps
+            new: set[Component] = set()
+            for node in comps:
+                traps = cg.g.vs[cg._g[node.num]]["traps"]
+                parts = [node]
+                for pred in traps:
+                    reach = cg.lts.succ_s(cg.lts.succ(cg[pred].states) & node.states)
+                    parts = [
+                        sp
+                        for p in parts
+                        for sp in p.split_prop(f"_trap_{pred}_{p.num}", reach, None)
+                        if sp is not None
+                    ]
+                    for p in parts:
+                        p.forget(f"_trap_{pred}_{p.num}")
+                cgc.update(parts)
+                new.update((p for p in parts if p not in comps))
+            cg = cg.__class__(cg.model, cg.lts, *cgc)
+            if not _recurse or not new:
+                break
+            if cg.model.opts.get("trap", False):
+                traps = {c.num: cg.g.vs[cg._g[c.num]]["traps"] for c in new}
+            else:
+                traps = cg.traps(*(c.num for c in new))
+            comps = {c for c in new if traps[c.num]}
         return cg
 
     def _classify_classname(self, classes, row):
@@ -1245,7 +1271,7 @@ class ComponentGraph:
         if len(self) < 2:
             log.print("cannot draw a graph with only one node", "error")
             display(self.nodes)
-            return
+            return None
         options = dict(
             nodes_fill_color="size",
             nodes_fill_palette=("red-green/white", "abs"),
