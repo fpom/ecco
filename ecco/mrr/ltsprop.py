@@ -124,7 +124,7 @@ class ARCTLProp(CTLProp):
         else:
             actions = {
                 self.cg.lts.tpred[n]: a.tags
-                for n, a in self.cg.model.spec.gal.items()
+                for n, a in self.cg.model._gal2act.items()
                 if isinstance(a, parser.Action)
             }
             checker = mc.FARCTL_model_checker(
