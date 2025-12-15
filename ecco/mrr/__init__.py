@@ -1,7 +1,9 @@
+import operator
 import re
 import sys
 from collections import defaultdict
 from itertools import product
+from functools import reduce
 from typing import cast
 
 import pandas as pd
@@ -327,6 +329,28 @@ class Model(BaseModel):
             return cg.split(*split, **aliased)
         else:
             return cg
+
+    def universe(self, *split, **aliased) -> ComponentGraph:
+        cg = ComponentGraph.universe(self)
+        if split or aliased:
+            return cg.split(*split, **aliased)
+        else:
+            return cg
+
+    @property
+    def maxsize(self):
+        def size(loc):
+            s = 1
+            for var in loc.variables:
+                if var.clock:
+                    s *= (len(var.domain) + 1) ** (var.size or 1)
+                else:
+                    s *= len(var.domain) ** (var.size or 1)
+            for sub in loc.locations:
+                s *= size(sub) ** (sub.size or 1)
+            return s
+
+        return size(self.spec)
 
     def expand(self, out=sys.stdout):
         self.spec.expand().save(out)

@@ -141,6 +141,17 @@ class ComponentGraph:
         return cls(model, lts, Component(lts, lts.states))
 
     @classmethod
+    def universe(cls, model):
+        _, doms, actions = model.gal()
+        model._gal2act = actions
+        g2m, m2g, n2n, n2t = cls._translate_names(doms, actions)
+        vmin = {v: min(d) for v, d in doms.items()}
+        vmax = {v: max(d) for v, d in doms.items()}
+        lts = LTS(str(model["gal"]), doms, vmin, vmax)
+        lts.g2m, lts.m2g, lts.n2n, lts.n2t = g2m, m2g, n2n, n2t
+        return cls(model, lts, Component(lts, lts.states))
+
+    @classmethod
     def _translate_names(cls, vnames, tnames):
         """Add variables and transitions translation tables to lts.
 
