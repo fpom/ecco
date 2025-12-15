@@ -142,6 +142,11 @@ class ComponentGraph:
 
     @classmethod
     def universe(cls, model):
+        """Create a `ComponentGraph` from an `ecco.mrr.Model` with all possible states.
+
+        Works as `from_model` but the set of initial states is computed as the set
+        of all possible states.
+        """
         _, doms, actions = model.gal()
         model._gal2act = actions
         g2m, m2g, n2n, n2t = cls._translate_names(doms, actions)

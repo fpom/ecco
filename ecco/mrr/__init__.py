@@ -313,7 +313,7 @@ class Model(BaseModel):
 
         # Aguments
 
-         - `_init (None)`: initial state given as a `dict` mapping variable
+         - `_init (None)`: initial states given as a `dict` mapping variable
            names to sets of initial values
          - `split, ...`: arguments suitable to `ComponentGraph.split()` in
            order to perform an initial split (if none is given, the graph will
@@ -331,6 +331,11 @@ class Model(BaseModel):
             return cg
 
     def universe(self, *split, **aliased) -> ComponentGraph:
+        """Build a `cg.ComponentGraph` from the model with all possible states.
+
+        Works as `__call__` but the inital states are automatically computed as
+        all the possible states.
+        """
         cg = ComponentGraph.universe(self)
         if split or aliased:
             return cg.split(*split, **aliased)
@@ -339,6 +344,12 @@ class Model(BaseModel):
 
     @property
     def maxsize(self):
+        """Maximal size of a model
+
+        This is the number of poissbile valuations that the variables may have.
+        Usually this is much more than the number of reachable states.
+        """
+
         def size(loc):
             s = 1
             for var in loc.variables:
