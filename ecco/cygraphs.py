@@ -1111,7 +1111,27 @@ _export_html = "".join(
 </head>
 <body>
 <a download="{filename}" href="data:{mimetype};charset=utf-8,{payload}">
-Download {filename}
+<strong>Download {filename}</strong>
+</a>
+</body>
+</html>""".splitlines()
+)
+
+_error_html = "".join(
+    """<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<strong>Failed</strong>
+<a download="graph.tex" href="data:text/plain;charset=utf-8,{tex}">
+Download graph.tex
+</a>
+<a download="graph.log" href="data:text/plain;charset=utf-8,{log}">
+Download graph.log
+</a>
+<a download="graph.out" href="data:text/plain;charset=utf-8,{out}">
+Download graph.out
 </a>
 </body>
 </html>""".splitlines()
@@ -2338,10 +2358,13 @@ class Graph(object):
 
         def on_click(event):
             output.clear_output()
-            data = quote(self._export(choice.value))
-            path = f"graph.{choice.value}"
-            mime = mimetypes.guess_type(path, False)[0] or "text/plain"
-            html = _export_html.format(filename=path, payload=data, mimetype=mime)
+            try:
+                data = quote(self._export(choice.value))
+                path = f"graph.{choice.value}"
+                mime = mimetypes.guess_type(path, False)[0] or "text/plain"
+                html = _export_html.format(filename=path, payload=data, mimetype=mime)
+            except subprocess.CalledProcessError as err:
+                html = _error_html.format(tex=err.tex, log=err.log, out=err.output)
             with output:
                 display(ipw.HTML(html))
 
