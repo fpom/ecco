@@ -2364,7 +2364,9 @@ class Graph(object):
                 mime = mimetypes.guess_type(path, False)[0] or "text/plain"
                 html = _export_html.format(filename=path, payload=data, mimetype=mime)
             except subprocess.CalledProcessError as err:
-                html = _error_html.format(tex=err.tex, log=err.log, out=err.output)
+                html = _error_html.format(
+                    tex=quote(err.tex), log=quote(err.log), out=quote(err.output)
+                )
             with output:
                 display(ipw.HTML(html))
 
