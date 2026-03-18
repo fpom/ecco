@@ -131,12 +131,13 @@ class ComponentGraph:
             init = default_init | cls._parse_state(init, m2g)
         else:
             init = default_init | init
-        h = hashlib.file_digest(open(model["gal"], "rb"), "sha256").hexdigest()
-        p = model.base / Path(h).with_suffix(".ddd")
-        c = str(p) if p.is_file() else ""
+        # h = hashlib.file_digest(open(model["gal"], "rb"), "sha256").hexdigest()
+        # p = model.base / Path(h).with_suffix(".ddd")
+        # c = str(p) if p.is_file() else ""
+        c = ""
         lts = LTS(str(model["gal"]), init, vmin, vmax, c)
-        if not c:
-            lts.save(str(p))
+        # if not c:
+        #     lts.save(str(p))
         lts.g2m, lts.m2g, lts.n2n, lts.n2t = g2m, m2g, n2n, n2t
         return cls(model, lts, Component(lts, lts.states))
 
