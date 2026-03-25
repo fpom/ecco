@@ -351,7 +351,7 @@ cdef class LTS:
             if v == var:
                 d = ddd.from_range(v, val, val, d)
             else:
-                d = ddd.from_range(v, self.vmin[var], self.vmax[var], d)
+                d = ddd.from_range(v, self.vmin[v], self.vmax[v], d)
         return d2s(d) & self.states
 
     cpdef sdd var_le(LTS self, str var, val_t val) except *:
@@ -629,9 +629,8 @@ cdef class Component:
      - `"DEAD"`: corresponding to `comp.lts.dead`
      - `"HULL"`: corresponding to `comp.lts.hull`
      - `"hull"`: corresponding to the convex hull of the SCCs within `comp`
-     - `"scc"`: corresponding to `comp` if it is itself a SCC
 
-    The two latter properties are local to the component and always included in it
+    The latter property is local to the component and always included in it
     (and possibly empty). The other ones are global properties related to the LTS.
     """
     # unique id
@@ -717,26 +716,18 @@ cdef class Component:
     cdef void _build_props(Component self):
         """Build local/global properties.
         """
-        cdef sdd s, h
+        cdef sdd h
         # check relation with global graph properties
         _update_prop(self.props, "INIT", self.states, self.lts.init)
         _update_prop(self.props, "DEAD", self.states, self.lts.dead)
         _update_prop(self.props, "HULL", self.states, self.lts.hull)
-        # check local SCC hull and SCC
+        # check local SCC hull
         succ = self.lts.succ_o & self.states
         pred = self.lts.pred_o & self.states
         h = succ(self.states) & pred(self.states)
-        if h:
-            # if h is not empty, pick a SCC insidde
-            s = h.pick()
-            s = self.lts.succ_s(s) & self.lts.pred_s(s)
-            if len(s) <= 1:
-                s = sdd.empty()
-        else:
-            # if h is empty => no SCC
-            s = sdd.empty()
+        if len(h) <= 1:
+            h = sdd.empty()
         _update_prop(self.props, "hull", self.states, h)
-        _update_prop(self.props, "scc", self.states, s)
 
     ##
     ## general API
