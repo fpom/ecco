@@ -160,6 +160,37 @@ class LTSProxy:
         else:
             return self.cg.make_states(spec) & self.lts.states
 
+    def __getattr__(self, name):
+        if name == "succ":
+            return self.lts.succ
+        elif name == "pred":
+            return self.lts.pred
+        elif name == "c_succ":
+            g2m = self.lts.g2m
+            return reduce(
+                operator.or_,
+                (h for n, h in self.lts.tsucc.items() if g2m[n].startswith("C")),
+            )
+        elif name == "r_succ":
+            g2m = self.lts.g2m
+            return reduce(
+                operator.or_,
+                (h for n, h in self.lts.tsucc.items() if g2m[n].startswith("R")),
+            )
+        elif name == "c_pred":
+            g2m = self.lts.g2m
+            return reduce(
+                operator.or_,
+                (h for n, h in self.lts.tpred.items() if g2m[n].startswith("C")),
+            )
+        elif name == "r_pred":
+            g2m = self.lts.g2m
+            return reduce(
+                operator.or_,
+                (h for n, h in self.lts.tpred.items() if g2m[n].startswith("R")),
+            )
+        raise AttributeError(f"LTS object has no attribute {name!r}")
+
 
 class StatePropEnv(dict):
     def __init__(self, cg, states):
