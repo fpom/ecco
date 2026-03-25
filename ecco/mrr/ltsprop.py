@@ -163,32 +163,64 @@ class LTSProxy:
     def __getattr__(self, name):
         if name == "succ":
             return self.lts.succ
+        elif name == "succ_s":
+            return self.lts.succ_s
+        elif name == "succ_o":
+            return self.lts.succ_o
         elif name == "pred":
             return self.lts.pred
-        elif name == "c_succ":
+        elif name == "pred_s":
+            return self.lts.pred_s
+        elif name == "pred_o":
+            return self.lts.pred_o
+        elif name in ("c_succ", "c_succ_s", "c_succ_o"):
             g2m = self.lts.g2m
-            return reduce(
+            c = reduce(
                 operator.or_,
                 (h for n, h in self.lts.tsucc.items() if g2m[n].startswith("C")),
             )
-        elif name == "r_succ":
+            if name == "c_succ":
+                return c
+            elif name == "c_succ_s":
+                return c.lfp()
+            elif name == "c_succ_o":
+                return c.gfp()
+        elif name in ("r_succ", "r_succ_s", "r_succ_o"):
             g2m = self.lts.g2m
-            return reduce(
+            r = reduce(
                 operator.or_,
                 (h for n, h in self.lts.tsucc.items() if g2m[n].startswith("R")),
             )
-        elif name == "c_pred":
+            if name == "r_succ":
+                return r
+            elif name == "r_succ_s":
+                return r.lfp()
+            elif name == "r_succ_o":
+                return r.gfp()
+        elif name in ("c_pred", "c_pred_s", "c_pred_o"):
             g2m = self.lts.g2m
-            return reduce(
+            c = reduce(
                 operator.or_,
                 (h for n, h in self.lts.tpred.items() if g2m[n].startswith("C")),
             )
-        elif name == "r_pred":
+            if name == "c_pred":
+                return c
+            elif name == "c_pred_s":
+                return c.lfp()
+            elif name == "c_pred_o":
+                return c.gfp()
+        elif name in ("r_pred", "r_pred_s", "r_pred_o"):
             g2m = self.lts.g2m
-            return reduce(
+            r = reduce(
                 operator.or_,
                 (h for n, h in self.lts.tpred.items() if g2m[n].startswith("R")),
             )
+            if name == "r_pred":
+                return r
+            elif name == "r_pred_s":
+                return r.lfp()
+            elif name == "r_pred_o":
+                return r.gfp()
         raise AttributeError(f"LTS object has no attribute {name!r}")
 
 
